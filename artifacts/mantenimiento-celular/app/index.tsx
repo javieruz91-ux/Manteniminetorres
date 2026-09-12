@@ -141,15 +141,13 @@ export default function DashboardScreen() {
                       customColor={{ bg: colors.warning, text: '#422006' }}
                     />
                   )}
-                  {(item.syncStatus !== 'PENDIENTE' || item.lifecycleStatus === 'CERRADA') && (
-                    <Badge
-                      text={item.syncStatus}
-                      customColor={{
-                        bg: getSyncColor(item.syncStatus),
-                        text: '#FFF'
-                      }}
-                    />
-                  )}
+                  <Badge
+                    text={item.syncStatus}
+                    customColor={{
+                      bg: getSyncColor(item.syncStatus),
+                      text: '#FFF'
+                    }}
+                  />
                 </View>
               </View>
               
@@ -172,6 +170,11 @@ export default function DashboardScreen() {
                     {item.findings.length} hallazgos
                   </Text>
                 </View>
+                {item.syncStatus === 'ERROR' && item.syncError && (
+                  <Text style={[styles.syncError, { color: colors.destructive }]} numberOfLines={2}>
+                    {item.syncError}
+                  </Text>
+                )}
               </View>
             </Card>
           </TouchableOpacity>
@@ -298,6 +301,12 @@ const styles = StyleSheet.create({
   infoText: {
     fontFamily: 'Inter_400Regular',
     fontSize: 14,
+  },
+  syncError: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 4,
   },
   emptyContainer: {
     alignItems: 'center',

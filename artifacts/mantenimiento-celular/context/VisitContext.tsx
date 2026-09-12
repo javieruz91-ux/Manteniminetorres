@@ -40,6 +40,13 @@ interface VisitContextValue {
 
 const VisitContext = createContext<VisitContextValue | null>(null);
 
+class VisitOperationChangedError extends Error {
+  constructor() {
+    super('La visita cambió mientras se sincronizaba; se conservará la nueva versión local.');
+    this.name = 'VisitOperationChangedError';
+  }
+}
+
 export function VisitProvider({ children }: { children: ReactNode }) {
   const [visits, setVisits] = useState<Visit[]>([]);
   const visitsRef = useRef<Visit[]>([]);
@@ -236,19 +243,35 @@ export function VisitProvider({ children }: { children: ReactNode }) {
         serverVisits.forEach(sv => {
           const idx = merged.findIndex(v => v.id === sv.visitId);
           if (idx >= 0) {
-            if (sv.serverVersion > (merged[idx].serverVersion || 0)) {
+            const localVisit = merged[idx];
+            const localIsDirty = ['PENDIENTE', 'SINCRONIZANDO', 'ERROR'].includes(
+              localVisit.syncStatus,
+            );
+            const localIsNewer =
+              new Date(localVisit.clientUpdatedAt).getTime() >
+              new Date(sv.clientUpdatedAt).getTime();
+
+            if (
+              sv.serverVersion > (localVisit.serverVersion || 0) &&
+              (!localIsDirty || !localIsNewer)
+            ) {
               merged[idx] = mapSnapshotToLocal(sv, remoteUris);
             } else {
-              // Merge only URIs on equal version to handle session blobs or newly downloaded native extensions
+              // Never replace a newer local revision with a server snapshot. We can
+              // still advance the known server version and merge downloaded files.
               merged[idx] = {
-                ...merged[idx],
-                findings: merged[idx].findings.map(f => ({
+                ...localVisit,
+                serverVersion: Math.max(
+                  localVisit.serverVersion || 0,
+                  sv.serverVersion,
+                ),
+                findings: localVisit.findings.map(f => ({
                   ...f,
                   photos: f.photos.map(p => ({
                     ...p,
-                    uri: remoteUris[p.id] || p.uri
-                  }))
-                }))
+                    uri: remoteUris[p.id] || p.uri,
+                  })),
+                })),
               };
             }
           } else {
@@ -277,7 +300,12 @@ export function VisitProvider({ children }: { children: ReactNode }) {
           // Crash recovery: revert SINCRONIZANDO -> PENDIENTE, preserving exact operationId
           parsed = parsed.map(v => {
             if (v.syncStatus === 'SINCRONIZANDO') {
-              return { ...v, syncStatus: 'PENDIENTE', syncAttemptCount: (v.syncAttemptCount || 0) + 1 };
+              return {
+                ...v,
+                syncStatus: 'PENDIENTE',
+                syncAttemptCount: (v.syncAttemptCount || 0) + 1,
+                nextAttemptAt: Date.now(),
+              };
             }
             return v;
           });
@@ -534,142 +562,182 @@ export function VisitProvider({ children }: { children: ReactNode }) {
 
   const processSyncQueue = useCallback(async () => {
     if (isDemoMode || isSyncing.current || !isOnline || !isHydrated.current || !isAuthenticated) return;
-    
-    let pendingVisits = visitsRef.current.filter(v => isSyncDue(v));
-    
+
+    const pendingVisits = visitsRef.current.filter(v => isSyncDue(v));
     if (pendingVisits.length === 0) return;
 
     isSyncing.current = true;
 
     try {
       for (const visit of pendingVisits) {
-        // Mark as syncing and await the exact state
         const persistedState = await updateAndPersist(prev => prev.map(v => {
           if (v.id === visit.id) {
-            return { ...v, syncStatus: 'SINCRONIZANDO' as const, syncAttemptCount: (v.syncAttemptCount || 0) + 1 };
+            return {
+              ...v,
+              syncStatus: 'SINCRONIZANDO' as const,
+              syncAttemptCount: (v.syncAttemptCount || 0) + 1,
+            };
           }
           return v;
         }));
-        
+
         let latestV = persistedState.find(v => v.id === visit.id);
-        if (!latestV) continue;
+        if (!latestV?.operationId) continue;
+
+        const syncVisitId = latestV.id;
+        const syncOperationId = latestV.operationId;
+        const persistOperationState = async (
+          updater: (current: Visit) => Visit,
+        ): Promise<Visit> => {
+          let matchedOperation = false;
+          const nextState = await updateAndPersist(prev => prev.map(current => {
+            if (current.id === syncVisitId && current.operationId === syncOperationId) {
+              matchedOperation = true;
+              return updater(current);
+            }
+            return current;
+          }));
+          if (!matchedOperation) throw new VisitOperationChangedError();
+          const current = nextState.find(v => v.id === syncVisitId);
+          if (!current) throw new VisitOperationChangedError();
+          return current;
+        };
 
         try {
           let allPhotosUploaded = true;
-          for (let f of latestV.findings) {
-            for (let p of f.photos) {
-              if (p.uploadStatus !== 'uploaded') {
-                try {
-                  let blob: Blob;
-                  if (Platform.OS === 'web') {
-                    const res = await fetch(p.uri);
-                    blob = await res.blob();
-                  } else {
-                    const res = await fetch(p.uri);
-                    blob = await res.blob();
-                  }
+          for (const finding of latestV.findings) {
+            for (const photo of finding.photos) {
+              if (photo.uploadStatus === 'uploaded') continue;
 
-                  const ext = p.uri.split('.').pop()?.toLowerCase() === 'png' ? 'png' : 'jpeg';
-                  const contentType: UploadUrlRequestContentType = ext === 'png' ? 'image/png' : 'image/jpeg';
-                  
-                  const urlRes = await requestUploadUrl({
-                    name: p.id + '.' + ext,
-                    size: blob.size || 1024,
-                    contentType,
-                    visitId: latestV!.id,
-                    sectionId: f.sectionId,
-                    pointId: f.pointId,
-                    findingId: f.id,
-                    type: p.type,
-                    localId: p.id
-                  });
+              try {
+                const response = await fetch(photo.uri);
+                if (!response.ok) throw new Error(`No se pudo leer la foto (${response.status})`);
+                const blob = await response.blob();
+                const ext = photo.uri.split('.').pop()?.toLowerCase() === 'png' ? 'png' : 'jpeg';
+                const contentType: UploadUrlRequestContentType =
+                  ext === 'png' ? 'image/png' : 'image/jpeg';
+                const urlRes = await requestUploadUrl({
+                  name: `${photo.id}.${ext}`,
+                  size: blob.size || 1024,
+                  contentType,
+                  visitId: syncVisitId,
+                  sectionId: finding.sectionId,
+                  pointId: finding.pointId,
+                  findingId: finding.id,
+                  type: photo.type,
+                  localId: photo.id,
+                });
 
-                  
-                  // Awaitable crash boundary: save path immediately BEFORE PUT
-                  const stateBeforeUpload = await updateAndPersist(prev => prev.map(pv => {
-                    if (pv.id === latestV!.id && pv.operationId === latestV!.operationId) {
-                      const updatedFindings = pv.findings.map(pf => {
-                        if (pf.id === f.id) {
-                          return { ...pf, photos: pf.photos.map(pp => pp.id === p.id ? { ...pp, uploadStatus: 'uploading' as UploadStatus, objectPath: urlRes.objectPath } : pp) };
+                latestV = await persistOperationState(current => ({
+                  ...current,
+                  findings: current.findings.map(item =>
+                    item.id === finding.id
+                      ? {
+                          ...item,
+                          photos: item.photos.map(itemPhoto =>
+                            itemPhoto.id === photo.id
+                              ? {
+                                  ...itemPhoto,
+                                  uploadStatus: 'uploading' as UploadStatus,
+                                  objectPath: urlRes.objectPath,
+                                }
+                              : itemPhoto,
+                          ),
                         }
-                        return pf;
-                      });
-                      return { ...pv, findings: updatedFindings };
-                    }
-                    return pv;
-                  }));
-                  
-                  latestV = stateBeforeUpload.find(v => v.id === latestV!.id);
-                  if (!latestV || latestV.operationId !== persistedState.find(v => v.id === visit.id)?.operationId) {
-                     // Abort if operation changed during url fetch
-                     throw new Error('Operation ID changed during requestUploadUrl');
-                  }
+                      : item,
+                  ),
+                }));
 
-                  const uploadRes = await fetch(urlRes.uploadURL, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': contentType },
-                    body: blob,
-                  });
-
-                  if (uploadRes.ok) {
-                    const stateAfterUpload = await updateAndPersist(prev => prev.map(pv => {
-                      if (pv.id === latestV!.id) {
-                        const updatedFindings = pv.findings.map(pf => {
-                          if (pf.id === f.id) {
-                            return { ...pf, photos: pf.photos.map(pp => pp.id === p.id ? { ...pp, uploadStatus: 'uploaded' as UploadStatus, objectPath: urlRes.objectPath } : pp) };
-                          }
-                          return pf;
-                        });
-                        return { ...pv, findings: updatedFindings };
-                      }
-                      return pv;
-                    }));
-                    latestV = stateAfterUpload.find(v => v.id === latestV!.id);
-                  } else {
-                    allPhotosUploaded = false;
-                    await updateAndPersist(prev => prev.map(pv => pv.id === latestV!.id ? { ...pv, findings: pv.findings.map(pf => pf.id === f.id ? { ...pf, photos: pf.photos.map(pp => pp.id === p.id ? { ...pp, uploadStatus: 'failed' as UploadStatus } : pp) } : pf) } : pv));
-                  }
-                } catch (err) {
-                  console.error('Photo upload error', err);
-                  allPhotosUploaded = false;
-                  await updateAndPersist(prev => prev.map(pv => pv.id === latestV!.id ? { ...pv, findings: pv.findings.map(pf => pf.id === f.id ? { ...pf, photos: pf.photos.map(pp => pp.id === p.id ? { ...pp, uploadStatus: 'failed' as UploadStatus } : pp) } : pf) } : pv));
+                const uploadRes = await fetch(urlRes.uploadURL, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': contentType },
+                  body: blob,
+                });
+                if (!uploadRes.ok) {
+                  throw new Error(`La carga de la foto falló (${uploadRes.status})`);
                 }
+
+                latestV = await persistOperationState(current => ({
+                  ...current,
+                  findings: current.findings.map(item =>
+                    item.id === finding.id
+                      ? {
+                          ...item,
+                          photos: item.photos.map(itemPhoto =>
+                            itemPhoto.id === photo.id
+                              ? {
+                                  ...itemPhoto,
+                                  uploadStatus: 'uploaded' as UploadStatus,
+                                  objectPath: urlRes.objectPath,
+                                }
+                              : itemPhoto,
+                          ),
+                        }
+                      : item,
+                  ),
+                }));
+              } catch (error) {
+                if (error instanceof VisitOperationChangedError) throw error;
+                console.error('Photo upload error', error);
+                allPhotosUploaded = false;
+                await persistOperationState(current => ({
+                  ...current,
+                  findings: current.findings.map(item =>
+                    item.id === finding.id
+                      ? {
+                          ...item,
+                          photos: item.photos.map(itemPhoto =>
+                            itemPhoto.id === photo.id
+                              ? { ...itemPhoto, uploadStatus: 'failed' as UploadStatus }
+                              : itemPhoto,
+                          ),
+                        }
+                      : item,
+                  ),
+                }));
               }
             }
           }
 
           if (!allPhotosUploaded) {
-            throw new Error('Failed to upload some photos');
+            throw new Error('No se pudieron cargar todas las fotos');
           }
-        } catch (err: any) {
-          console.error('Visit sync failed early', err);
-          await updateAndPersist(prev => prev.map(pv => {
-            if (pv.id === latestV!.id) {
-              const delay = retryDelayMs(pv.syncAttemptCount || 1);
-              return { ...pv, syncStatus: 'ERROR', syncError: err.message || 'Error', nextAttemptAt: Date.now() + delay };
+        } catch (error) {
+          if (error instanceof VisitOperationChangedError) continue;
+          const message = error instanceof Error ? error.message : 'Error';
+          console.error('Visit sync failed early', error);
+          await updateAndPersist(prev => prev.map(current => {
+            if (current.id === syncVisitId && current.operationId === syncOperationId) {
+              return {
+                ...current,
+                syncStatus: 'ERROR',
+                syncError: message,
+                nextAttemptAt: Date.now() + retryDelayMs(current.syncAttemptCount || 1),
+              };
             }
-            return pv;
+            return current;
           }));
           continue;
         }
 
-        // Build exact state for API sync
-        const currentV = latestV!;
-        const photos: VisitPhoto[] = currentV.findings.flatMap(f => f.photos.map(p => ({
-          visitId: currentV.id,
-          sectionId: f.sectionId,
-          pointId: f.pointId,
-          findingId: f.id,
-          type: p.type,
-          localId: p.id,
-          objectPath: p.objectPath,
-          uploadStatus: 'uploaded' as VisitPhotoUploadStatus,
-          size: p.size,
-        })));
+        const currentV = latestV;
+        const photos: VisitPhoto[] = currentV.findings.flatMap(f =>
+          f.photos.map(p => ({
+            visitId: currentV.id,
+            sectionId: f.sectionId,
+            pointId: f.pointId,
+            findingId: f.id,
+            type: p.type,
+            localId: p.id,
+            objectPath: p.objectPath,
+            uploadStatus: 'uploaded' as VisitPhotoUploadStatus,
+            size: p.size,
+          })),
+        );
 
         const input: VisitSyncInput = {
           visitId: currentV.id,
-          operationId: currentV.operationId!,
+          operationId: syncOperationId,
           siteId: currentV.siteId,
           siteName: currentV.siteName,
           workOrder: currentV.workOrder,
@@ -686,26 +754,25 @@ export function VisitProvider({ children }: { children: ReactNode }) {
             title: s.title,
             name: s.name,
             status: s.status as VisitSectionStatus,
-            points: s.points.map(pt => {
-              const fds = currentV.findings.filter(f => f.pointId === pt.id).map(f => ({
-                id: f.id,
-                sectionId: f.sectionId,
-                pointId: f.pointId,
-                state: f.state as VisitFindingState,
-                description: f.description,
-                responsible: f.responsible,
-                priority: f.priority as VisitFindingPriority,
-                startDate: f.startDate,
-                commitmentDate: f.commitmentDate,
-                completedDate: f.completedDate,
-              }));
-              return {
-                id: pt.id,
-                title: pt.title,
-                status: pt.status as VisitPointStatus,
-                findings: fds
-              };
-            })
+            points: s.points.map(pt => ({
+              id: pt.id,
+              title: pt.title,
+              status: pt.status as VisitPointStatus,
+              findings: currentV.findings
+                .filter(f => f.pointId === pt.id)
+                .map(f => ({
+                  id: f.id,
+                  sectionId: f.sectionId,
+                  pointId: f.pointId,
+                  state: f.state as VisitFindingState,
+                  description: f.description,
+                  responsible: f.responsible,
+                  priority: f.priority as VisitFindingPriority,
+                  startDate: f.startDate,
+                  commitmentDate: f.commitmentDate,
+                  completedDate: f.completedDate,
+                })),
+            })),
           })),
           auditEvents: currentV.auditEvents.map(a => ({
             id: a.id,
@@ -714,39 +781,47 @@ export function VisitProvider({ children }: { children: ReactNode }) {
             actorId: a.actorId,
             metadata: a.metadata,
           })),
-          photos
+          photos,
         };
 
         try {
-          const conf = await syncVisit(input, { headers: { 'Idempotency-Key': currentV.operationId! }});
-          await updateAndPersist(prev => prev.map(pv => {
-            if (pv.id === currentV.id) {
-              if (pv.operationId === currentV.operationId) {
-                return { 
-                  ...pv, 
-                  syncStatus: 'SINCRONIZADO', 
-                  serverVersion: conf.serverVersion, 
-                  confirmedAt: conf.confirmedAt, 
-                  syncError: undefined 
-                };
-              } else {
-                // If operationId changed during sync (user edited), just update metadata but leave PENDIENTE
+          const conf = await syncVisit(input, {
+            headers: { 'Idempotency-Key': syncOperationId },
+          });
+          await updateAndPersist(prev => prev.map(current => {
+            if (current.id === syncVisitId) {
+              if (current.operationId === syncOperationId) {
                 return {
-                  ...pv,
+                  ...current,
+                  syncStatus: 'SINCRONIZADO',
                   serverVersion: conf.serverVersion,
-                  confirmedAt: conf.confirmedAt
+                  confirmedAt: conf.confirmedAt,
+                  syncError: undefined,
+                  nextAttemptAt: undefined,
                 };
               }
+              // The server accepted the older operation, but a newer local
+              // revision must remain pending. Only advance its base version.
+              return {
+                ...current,
+                serverVersion: Math.max(current.serverVersion || 0, conf.serverVersion),
+                confirmedAt: conf.confirmedAt,
+              };
             }
-            return pv;
+            return current;
           }));
-        } catch (err: any) {
-          await updateAndPersist(prev => prev.map(pv => {
-            if (pv.id === currentV.id && pv.operationId === currentV.operationId) {
-              const delay = retryDelayMs(pv.syncAttemptCount || 1);
-              return { ...pv, syncStatus: 'ERROR', syncError: err.message || 'Error desconocido', nextAttemptAt: Date.now() + delay };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Error desconocido';
+          await updateAndPersist(prev => prev.map(current => {
+            if (current.id === syncVisitId && current.operationId === syncOperationId) {
+              return {
+                ...current,
+                syncStatus: 'ERROR',
+                syncError: message,
+                nextAttemptAt: Date.now() + retryDelayMs(current.syncAttemptCount || 1),
+              };
             }
-            return pv;
+            return current;
           }));
         }
       }
@@ -839,9 +914,9 @@ function mapSnapshotToLocal(sv: VisitSnapshot, remoteUris: Record<string, string
           description: f.description,
           responsible: f.responsible,
           priority: f.priority as FindingPriority,
-          startDate: f.startDate,
-          commitmentDate: f.commitmentDate,
-          completedDate: f.completedDate,
+          startDate: normalizeDateOnly(f.startDate),
+          commitmentDate: normalizeDateOnly(f.commitmentDate),
+          completedDate: f.completedDate ? normalizeDateOnly(f.completedDate) : null,
           state: f.state as FindingState,
           photos: sv.photos.filter(ph => ph.findingId === f.id).map(ph => {
              // For restored photos without local file, the uri should be the documentDirectory path.
@@ -896,4 +971,8 @@ function mapSnapshotToLocal(sv: VisitSnapshot, remoteUris: Record<string, string
     operationId: Crypto.randomUUID(),
     syncAttemptCount: 0
   };
+}
+
+function normalizeDateOnly(value: string): string {
+  return value.includes('T') ? value.slice(0, 10) : value;
 }
