@@ -137,6 +137,11 @@ export interface VisitFinding {
   metadata?: VisitFindingMetadata;
 }
 
+/**
+ * Template-driven responses keyed by catalog field id.
+ */
+export type VisitPointFields = {[key: string]: string | number | boolean | null};
+
 export type VisitPointStatus = typeof VisitPointStatus[keyof typeof VisitPointStatus];
 
 
@@ -152,6 +157,8 @@ export interface VisitPoint {
   /** @minLength 1 */
   id: string;
   title: string;
+  /** Template-driven responses keyed by catalog field id. */
+  fields?: VisitPointFields;
   status: VisitPointStatus;
   findings: VisitFinding[];
 }
@@ -196,13 +203,87 @@ export const VisitSnapshotSyncStatus = {
   ERROR: 'ERROR',
 } as const;
 
+/**
+ * @nullable
+ */
+export type TemplateResponseValue = string | number | boolean | null;
+
+/**
+ * Responses keyed by imported template field id.
+ */
+export type VisitSnapshotResponses = {[key: string]: TemplateResponseValue | null};
+
+export interface VisitTemplatePin {
+  /** @minimum 1 */
+  version: number;
+  /**
+     * @minLength 64
+     * @maxLength 64
+     */
+  sha256: string;
+}
+
+export type TemplateFieldResponseType = typeof TemplateFieldResponseType[keyof typeof TemplateFieldResponseType];
+
+
+export const TemplateFieldResponseType = {
+  text: 'text',
+  number: 'number',
+  date: 'date',
+  selection: 'selection',
+  measurement: 'measurement',
+  observation: 'observation',
+  status: 'status',
+} as const;
+
+export type TemplateFieldEvidenceSlot = typeof TemplateFieldEvidenceSlot[keyof typeof TemplateFieldEvidenceSlot];
+
+
+export const TemplateFieldEvidenceSlot = {
+  photo: 'photo',
+  observation: 'observation',
+  none: 'none',
+} as const;
+
+export type TemplateFieldState = typeof TemplateFieldState[keyof typeof TemplateFieldState];
+
+
+export const TemplateFieldState = {
+  mapped: 'mapped',
+  ignored: 'ignored',
+  unresolved: 'unresolved',
+} as const;
+
+export interface TemplateField {
+  id: string;
+  sheet: string;
+  subsection: string;
+  key: string;
+  label: string;
+  responseType: TemplateFieldResponseType;
+  options: string[];
+  required: boolean;
+  applicability: string;
+  evidenceSlot: TemplateFieldEvidenceSlot;
+  target: string;
+  sourceEvidence: string;
+  /**
+     * @minimum 0
+     * @maximum 1
+     */
+  confidence: number;
+  state: TemplateFieldState;
+  /** @nullable */
+  ignoreReason?: string | null;
+}
+
 export interface VisitSnapshot {
   /** @minLength 1 */
   visitId: string;
-  siteId: string;
-  siteName: string;
-  workOrder: string;
-  technician: string;
+  siteId?: string;
+  siteName?: string;
+  workOrder?: string;
+  technician?: string;
   visitDate: string;
   lifecycleStatus: VisitSnapshotLifecycleStatus;
   syncStatus: VisitSnapshotSyncStatus;
@@ -216,6 +297,11 @@ export interface VisitSnapshot {
   sections: VisitSection[];
   auditEvents: VisitAuditEvent[];
   photos: VisitPhoto[];
+  template: VisitTemplatePin;
+  /** Complete immutable catalog revision used by this visit. */
+  templateFields: TemplateField[];
+  /** Responses keyed by imported template field id. */
+  responses: VisitSnapshotResponses;
 }
 
 export type VisitListResponse = VisitSnapshot[];
@@ -271,6 +357,102 @@ export interface UploadUrlResponse {
   uploadURL: string;
   objectPath: string;
   metadata: UploadUrlRequest;
+}
+
+export type TemplateAuditCandidateState = typeof TemplateAuditCandidateState[keyof typeof TemplateAuditCandidateState];
+
+
+export const TemplateAuditCandidateState = {
+  unresolved: 'unresolved',
+  ignored: 'ignored',
+} as const;
+
+export interface TemplateAuditCandidate {
+  target: string;
+  sheet: string;
+  reason: string;
+  /**
+     * @minimum 0
+     * @maximum 1
+     */
+  confidence: number;
+  state: TemplateAuditCandidateState;
+  /** @nullable */
+  ignoreReason?: string | null;
+}
+
+export type TemplateDescriptorAuditItem = { [key: string]: unknown };
+
+export interface TemplateDescriptor {
+  ready: boolean;
+  /** @minimum 0 */
+  version: number;
+  /** @nullable */
+  fileName: string | null;
+  /** @nullable */
+  sha256: string | null;
+  catalog: TemplateField[];
+  unmapped: TemplateAuditCandidate[];
+  audit: TemplateDescriptorAuditItem[];
+}
+
+export interface TemplateImportInput {
+  /** @minLength 1 */
+  fileName: string;
+  /** @minLength 1 */
+  contentBase64: string;
+  replace: boolean;
+}
+
+export type TemplateMappingPatchState = typeof TemplateMappingPatchState[keyof typeof TemplateMappingPatchState];
+
+
+export const TemplateMappingPatchState = {
+  mapped: 'mapped',
+  ignored: 'ignored',
+} as const;
+
+export interface TemplateMappingPatch {
+  /** @minLength 1 */
+  candidateTarget: string;
+  field?: TemplateField;
+  state: TemplateMappingPatchState;
+  /** @nullable */
+  ignoreReason?: string | null;
+}
+
+export interface TemplateMappingsPatch {
+  /** @minimum 1 */
+  version: number;
+  mappings: TemplateMappingPatch[];
+}
+
+export type TemplateExportInputFormat = typeof TemplateExportInputFormat[keyof typeof TemplateExportInputFormat];
+
+
+export const TemplateExportInputFormat = {
+  xlsx: 'xlsx',
+  pdf: 'pdf',
+} as const;
+
+export interface TemplateExportInput {
+  /** @minLength 1 */
+  visitId: string;
+  format: TemplateExportInputFormat;
+}
+
+export type TemplateExportResponseVerification = {
+  valid: boolean;
+  sheets: string[];
+  writtenTargets: string[];
+  details?: string[];
+};
+
+export interface TemplateExportResponse {
+  fileName: string;
+  contentBase64: string;
+  mime: string;
+  verification: TemplateExportResponseVerification;
 }
 
 export type AuthorizationSessionHeaderParameter = string;

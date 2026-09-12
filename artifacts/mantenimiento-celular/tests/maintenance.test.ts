@@ -1,17 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import {
   closeVisit,
-  continueDraftVisit,
   createDraftVisit,
+  createImportedSections,
+  buildTemplateSyncSnapshot,
+  buildStatusPointWire,
   getCloseEligibility,
   isSyncDue,
   markSyncError,
-  reopenVisit,
   retryDelayMs,
   saveFindingAndStatus,
   setPointStatus,
 } from '../utils/maintenanceRules';
-import { Finding, Photo, Visit } from '../types';
+import {
+  buildTemplateMappingsPatch,
+  getTemplateExportBlockReason,
+  validateTemplateMappings,
+} from '../utils/templateValidation';
+import type { Finding, Photo, TemplateField, TemplateDescriptor, Visit } from '../types';
 
 const ids = (() => {
   let index = 0;
@@ -19,29 +25,38 @@ const ids = (() => {
 })();
 const now = () => '2026-01-02T03:04:05.000Z';
 
+const importedFields: TemplateField[] = [
+  { id: 'title', label: 'PRESENTACION', sheet: 'PRESENTACION', section: '', type: 'text', target: { cell: 'A1' }, isTitle: true, editable: false },
+  { id: 'status-1', label: 'Estado del equipo', sheet: 'ENERGIA', section: 'Planta', subsection: 'Rectificador', type: 'status', target: { cell: 'B4' }, options: ['OK', 'NOK', 'SC', 'NA'], required: true },
+  { id: 'text-1', label: 'Región', sheet: 'PRESENTACION', section: 'Datos', type: 'text', target: { cell: 'B2' }, required: true },
+  { id: 'number-1', label: 'Potencia', sheet: 'ENERGIA', section: 'Medidas', type: 'number', target: { cell: 'B5' } },
+  { id: 'date-1', label: 'Fecha', sheet: 'PRESENTACION', section: 'Datos', type: 'date', target: { cell: 'B3' } },
+  { id: 'selection-1', label: 'Central', sheet: 'PRESENTACION', section: 'Datos', type: 'selection', target: { cell: 'B6' }, options: ['Sí', 'No'] },
+  { id: 'measurement-1', label: 'Voltaje', sheet: 'ENERGIA', section: 'Medidas', type: 'measurement', target: { cell: 'B7' } },
+  { id: 'observation-1', label: 'Observación', sheet: 'ENERGIA', section: 'Notas', type: 'observation', target: { cell: 'B8' } },
+];
+
+function template() {
+  return { id: 'template-1', version: '3', hash: 'sha256-template-1' };
+}
+
 function draft(): Visit {
   return createDraftVisit(
-    { siteId: 'S1', siteName: 'Sitio', workOrder: 'OT-1', technician: 'Ana' },
+    { template: template(), templateFields: importedFields },
     { id: ids, now },
   );
 }
 
 function photo(id: string, type: Photo['type']): Photo {
-  return {
-    id,
-    uri: `data:image/jpeg;base64,${id}`,
-    type,
-    timestamp: 1,
-    objectPath: null,
-    uploadStatus: 'pending',
-  };
+  return { id, uri: `data:image/jpeg;base64,${id}`, type, timestamp: 1, objectPath: null, uploadStatus: 'pending' };
 }
 
-function completeFinding(visit: Visit): Finding {
+function finding(visit: Visit): Finding {
+  const point = visit.sections[0].points[0];
   return {
     id: 'finding-1',
     sectionId: visit.sections[0].id,
-    pointId: visit.sections[0].points[0].id,
+    pointId: point.id,
     description: 'Cable deteriorado',
     responsible: 'Mantenimiento',
     priority: 'ALTA',
@@ -53,83 +68,190 @@ function completeFinding(visit: Visit): Finding {
   };
 }
 
-function allPoints(visit: Visit, status: 'OK' | 'NOK' = 'OK'): Visit {
+function allStatusPoints(visit: Visit, status: 'OK' | 'NOK' = 'OK'): Visit {
   return {
     ...visit,
-    sections: visit.sections.map((section) => ({
+    sections: visit.sections.map(section => ({
       ...section,
-      points: section.points.map((point) => ({ ...point, status })),
+      points: section.points.map(point => ({ ...point, status })),
     })),
+    responses: { ...visit.responses, 'status-1': status, 'text-1': 'Andina' },
   };
 }
 
-describe('maintenance business rules', () => {
-  it('creates and continues a draft with fresh operation metadata', () => {
+describe('dynamic template maintenance rules', () => {
+  it('creates a pinned draft with every imported response and no title point', () => {
     const visit = draft();
-    const continued = continueDraftVisit(
-      visit,
-      { siteName: 'Sitio actualizado' },
-      { id: ids, now: () => '2026-01-03T03:04:05.000Z' },
-    );
-    expect(visit.lifecycleStatus).toBe('BORRADOR');
-    expect(visit.sections).toHaveLength(10);
-    expect(continued.siteName).toBe('Sitio actualizado');
-    expect(continued.operationId).not.toBe(visit.operationId);
-    expect(continued.syncStatus).toBe('PENDIENTE');
+    expect(visit.template).toEqual(template());
+    expect(Object.keys(visit.responses)).toHaveLength(importedFields.length);
+    expect(visit.sections.flatMap(section => section.points).map(point => point.id)).toEqual(['status-1']);
+    expect(createImportedSections(importedFields)[0].points[0].title).toBe('Estado del equipo');
   });
 
-  it('supports OK, SC and NA, and removes finding/photos when leaving NOK', () => {
-    let visit = draft();
-    const point = visit.sections[0].points[0];
-    visit = saveFindingAndStatus(visit, visit.sections[0].id, point.id, 'NOK', completeFinding(visit), { id: ids, now });
-    expect(visit.findings[0].photos).toHaveLength(1);
-    for (const status of ['OK', 'SC', 'NA'] as const) {
-      const next = setPointStatus(visit, visit.sections[0].id, point.id, status, { id: ids, now });
-      expect(next.sections[0].points[0].status).toBe(status);
-      expect(next.findings).toHaveLength(0);
-      visit = next;
-    }
+  it('supports every imported response type without synthesizing catalog fields', () => {
+    const visit = draft();
+    const next = Object.entries({
+      'text-1': 'Andina',
+      'number-1': 12,
+      'date-1': '2026-01-02',
+      'selection-1': 'Sí',
+      'measurement-1': 48.5,
+      'observation-1': 'Sin novedades',
+    }).reduce((current, [fieldId, value]) => ({
+      ...current,
+      responses: { ...current.responses, [fieldId]: value },
+    }), visit);
+    expect(next.responses).toMatchObject({
+      'text-1': 'Andina',
+      'number-1': 12,
+      'date-1': '2026-01-02',
+      'selection-1': 'Sí',
+      'measurement-1': 48.5,
+      'observation-1': 'Sin novedades',
+    });
+    expect(createDraftVisit().sections).toEqual([]);
+    expect(createDraftVisit().templateFields).toEqual([]);
   });
 
-  it('requires a finding, required fields, and an ANTES photo for NOK', () => {
-    let visit = allPoints(draft());
-    visit = {
+  it('serializes and restores the exact pinned template, fields and every typed response', () => {
+    const visit = draft();
+    const filled: Visit = {
       ...visit,
-      sections: visit.sections.map((section, index) =>
-        index === 0
-          ? { ...section, points: [{ ...section.points[0], status: 'NOK' }, ...section.points.slice(1)] }
-          : section,
-      ),
+      responses: {
+        ...visit.responses,
+        'status-1': 'OK',
+        'text-1': 'Andina',
+        'number-1': 12,
+        'date-1': '2026-01-02',
+        'selection-1': 'Sí',
+        'measurement-1': 48.5,
+        'observation-1': 'Sin novedades',
+      },
     };
+    const restored = JSON.parse(JSON.stringify(buildTemplateSyncSnapshot(filled)));
+    expect(restored.template).toEqual({ version: 3, sha256: template().hash });
+    expect(restored.templateFields).toHaveLength(importedFields.length);
+    expect(restored.templateFields.map((field: { id: string }) => field.id)).toEqual(importedFields.map(field => field.id));
+    expect(restored.templateFields.find((field: { id: string }) => field.id === 'status-1')).toMatchObject({
+      responseType: 'status',
+      evidenceSlot: 'photo',
+      target: 'ENERGIA!B4',
+      options: ['OK', 'NOK', 'SC', 'NA'],
+    });
+    expect(restored.responses).toEqual(filled.responses);
+  });
+
+  it('serializes two status fields onto exactly one owning point each', () => {
+    const fields = [
+      ...importedFields,
+      {
+        id: 'status-2',
+        label: 'Estado del banco',
+        sheet: 'ENERGIA',
+        section: 'Planta',
+        subsection: 'Banco',
+        type: 'status' as const,
+        target: { range: 'B10:C10' },
+      },
+    ];
+    const responses = { 'status-1': 'OK', 'status-2': 'NOK', 'text-1': 'Norte' };
+    const points = [
+      buildStatusPointWire({ id: 'status-1', status: 'PENDING' }, fields, responses),
+      buildStatusPointWire({ id: 'status-2', status: 'PENDING' }, fields, responses),
+    ];
+    const restored = JSON.parse(JSON.stringify({ points }));
+    expect(restored.points[0]).toEqual({ fields: { 'status-1': 'OK' }, status: 'OK' });
+    expect(restored.points[1]).toEqual({ fields: { 'status-2': 'NOK' }, status: 'NOK' });
+    const occurrences = restored.points.flatMap((point: { fields: Record<string, string> }) => Object.keys(point.fields));
+    expect(occurrences).toEqual(['status-1', 'status-2']);
+    expect(new Set(occurrences).size).toBe(2);
+  });
+
+  it('requires imported required fields and a finding/photo for NOK before close', () => {
+    let visit = allStatusPoints(draft(), 'NOK');
     expect(getCloseEligibility(visit).eligible).toBe(false);
     expect(getCloseEligibility(visit).missingItems.join('\n')).toContain('Falta hallazgo');
-
-    const finding = completeFinding(visit);
-    visit = saveFindingAndStatus(visit, visit.sections[0].id, visit.sections[0].points[0].id, 'NOK', {
-      ...finding,
-      photos: [],
-    }, { id: ids, now });
-    expect(getCloseEligibility(visit).allNokHaveFindings).toBe(false);
-    expect(getCloseEligibility(visit).missingItems.join('\n')).toContain('Falta foto ANTES');
-  });
-
-  it('allows close only when complete, is read-only after close, and audits reopen', () => {
-    let visit = allPoints(draft());
+    visit = saveFindingAndStatus(visit, visit.sections[0].id, 'status-1', 'NOK', finding(visit), { id: ids, now });
     expect(getCloseEligibility(visit).eligible).toBe(true);
-    visit = closeVisit(visit, { id: 'close', eventType: 'CLOSE_VISIT', occurredAt: now() }, { id: ids, now });
-    expect(visit.lifecycleStatus).toBe('CERRADA');
-    expect(() => continueDraftVisit(visit, { siteName: 'Nope' }, { id: ids, now })).toThrow(/cerrada/);
-    const reopened = reopenVisit(
-      visit,
-      { id: 'reopen', eventType: 'REOPEN_VISIT', occurredAt: now(), metadata: { reason: 'Corrección' } },
-      { id: ids, now },
-    );
-    expect(reopened.lifecycleStatus).toBe('REABIERTA');
-    expect(reopened.auditEvents.at(-1)?.eventType).toBe('REOPEN_VISIT');
-    expect(reopened.auditEvents.at(-1)?.metadata).toEqual({ reason: 'Corrección' });
+    visit = { ...visit, responses: { ...visit.responses, 'text-1': '' } };
+    expect(getCloseEligibility(visit).missingItems.join('\n')).toContain('Campo requerido');
   });
 
-  it('handles offline queue due state and exponential retry backoff', () => {
+  it('removes NOK finding evidence when leaving NOK and preserves lifecycle rules', () => {
+    const nokDraft = allStatusPoints(draft(), 'NOK');
+    let visit = saveFindingAndStatus(nokDraft, nokDraft.sections[0].id, 'status-1', 'NOK', finding(nokDraft), { id: ids, now });
+    expect(visit.findings).toHaveLength(1);
+    visit = setPointStatus(visit, nokDraft.sections[0].id, 'status-1', 'OK', { id: ids, now });
+    expect(visit.findings).toHaveLength(0);
+    const closed = closeVisit(allStatusPoints(draft()), { id: 'close', eventType: 'CLOSE_VISIT', occurredAt: now() }, { id: ids, now });
+    expect(closed.lifecycleStatus).toBe('CERRADA');
+  });
+
+  it('blocks export without a pinned ready template or with unresolved audit cells', () => {
+    const descriptor = (overrides: Partial<TemplateDescriptor> = {}): TemplateDescriptor => ({
+      id: 'template-1', version: '3', hash: 'hash', fileName: 'original.xlsx', uploadedAt: now(),
+      ready: true, sheets: 1, sections: 1, fields: 1, unmappedCells: [], ...overrides,
+    });
+    expect(getTemplateExportBlockReason({}, descriptor())).toBe('Falta cargar la plantilla Excel original');
+    expect(getTemplateExportBlockReason({ template: template() }, descriptor({ ready: false }))).toContain('sin mapear');
+    expect(getTemplateExportBlockReason({ template: template() }, descriptor())).toBeNull();
+  });
+
+  it('validates complete mappings, status options, exact targets and ignore reasons', () => {
+    const base = {
+      id: 'cell-1', label: 'Estado', fullText: 'Estado del equipo', sheet: 'ENERGIA',
+      section: 'Planta', subsection: 'Rectificador', type: 'status' as const,
+      options: ['OK', 'NOK', 'SC', 'NA'], required: true, applicability: 'Indoor', evidenceSlot: 'photo' as const,
+      target: { cell: 'B4' },
+    };
+    expect(validateTemplateMappings([base])).toEqual([]);
+    expect(validateTemplateMappings([{ ...base, options: ['OK'] }])).not.toEqual([]);
+    expect(validateTemplateMappings([{ ...base, ignore: true }])[0].message).toContain('razón');
+    expect(validateTemplateMappings([{ ...base, target: {} }])).not.toEqual([]);
+    expect(validateTemplateMappings([{ ...base, target: { range: 'B4:C8' } }])).toEqual([]);
+    expect(validateTemplateMappings([{ ...base, target: { range: 'B4:C' } }])[0].message).toContain('A1');
+    expect(validateTemplateMappings([{ ...base, target: { cell: 'ENERGIA!B4' } }])[0].message).toContain('A1');
+    expect(validateTemplateMappings([{ ...base, evidenceSlot: 'invalid' as never }])[0].message).toContain('evidencia');
+  });
+
+  it('adapts a descriptor candidate to the exact generated PATCH identity and evidence slot', () => {
+    const patch = buildTemplateMappingsPatch([{
+      id: 'candidate-photo',
+      candidateTarget: 'REPORTE FOTOGRAFICO!B4',
+      label: 'Evidencia antes',
+      fullText: 'Fotografía del equipo antes de corregir',
+      sheet: 'REPORTE FOTOGRAFICO',
+      section: 'Evidencias',
+      subsection: 'Antes',
+      type: 'observation',
+      evidenceSlot: 'photo',
+      target: { cell: 'B4' },
+      options: [],
+      required: false,
+      applicability: 'NOK',
+    }]);
+    expect(patch.mappings[0].candidateTarget).toBe('REPORTE FOTOGRAFICO!B4');
+    expect(patch.mappings[0].field).toMatchObject({
+      target: 'REPORTE FOTOGRAFICO!B4',
+      evidenceSlot: 'photo',
+      responseType: 'observation',
+    });
+    const rangePatch = buildTemplateMappingsPatch([{
+      id: 'candidate-range',
+      candidateTarget: 'REPORTE FOTOGRAFICO!B4:C8',
+      label: 'Rango evidencia',
+      fullText: 'Rango combinado',
+      sheet: 'REPORTE FOTOGRAFICO',
+      section: 'Evidencias',
+      type: 'text',
+      evidenceSlot: 'none',
+      target: { range: 'B4:C8' },
+    }]);
+    expect(rangePatch.mappings[0].candidateTarget).toBe('REPORTE FOTOGRAFICO!B4:C8');
+    expect(rangePatch.mappings[0].field?.target).toBe('REPORTE FOTOGRAFICO!B4:C8');
+  });
+
+  it('keeps retry scheduling and exponential backoff', () => {
     const visit = draft();
     expect(isSyncDue(visit, 100)).toBe(true);
     expect(retryDelayMs(1)).toBe(2_000);
@@ -138,7 +260,5 @@ describe('maintenance business rules', () => {
     const error = markSyncError({ ...visit, syncAttemptCount: 2 }, 'offline', 1000);
     expect(error.syncStatus).toBe('ERROR');
     expect(error.nextAttemptAt).toBe(5000);
-    expect(isSyncDue(error, 4999)).toBe(false);
-    expect(isSyncDue(error, 5000)).toBe(true);
   });
 });

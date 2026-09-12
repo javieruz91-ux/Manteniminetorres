@@ -10,7 +10,9 @@ import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Crypto from 'expo-crypto';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { generateAndShareXLSX, generateAndSharePDF } from '@/utils/report';
+import { saveAndShareTemplateExport } from '@/utils/templateExport';
+import { exportTemplate, getTemplateExportBlockReason } from '@/lib/templateApi';
+import { useTemplate } from '@/context/TemplateContext';
 import { AuditEvent, Finding } from '@/types';
 import { getCloseEligibility } from '@/utils/maintenanceRules';
 
@@ -18,6 +20,7 @@ export default function SummaryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { getVisit, updateVisit, triggerSync, closeVisit, reopenVisit, isDemoMode } = useVisits();
   const { user, login } = useAuth();
+  const { catalog } = useTemplate();
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -153,23 +156,25 @@ export default function SummaryScreen() {
     }
   };
 
-  const handleDownloadCSV = async () => {
-    try {
-      setIsGenerating(true);
-      await generateAndShareXLSX(visit);
-    } catch (error) {
-      Alert.alert('Error', 'No se pudo generar el archivo de mantenimiento.');
-    } finally {
-      setIsGenerating(false);
+  const handleDownload = async (format: 'xlsx' | 'pdf') => {
+    const exportBlock = getTemplateExportBlockReason(visit, catalog?.descriptor);
+    if (exportBlock) {
+      Alert.alert(exportBlock, exportBlock);
+      return;
     }
-  };
-
-  const handleDownloadPDF = async () => {
     try {
       setIsGenerating(true);
-      await generateAndSharePDF(visit);
+      const result = await exportTemplate(visit.id, format);
+      if (
+        result.verification &&
+        (result.verification.verified === false ||
+          result.verification.valid === false)
+      ) {
+        throw new Error('La verificación del archivo exportado falló.');
+      }
+      await saveAndShareTemplateExport(result);
     } catch (error) {
-      Alert.alert('Error', 'No se pudo generar el reporte fotográfico.');
+      Alert.alert('Error', error instanceof Error ? error.message : 'No se pudo descargar el archivo.');
     } finally {
       setIsGenerating(false);
     }
@@ -258,14 +263,14 @@ export default function SummaryScreen() {
                 title="Descargar Reporte Excel"
                 variant="outline"
                 icon={<Feather name="download" size={18} color={colors.foreground} />}
-                onPress={handleDownloadCSV}
+                 onPress={() => void handleDownload('xlsx')}
                 disabled={isGenerating}
               />
               <Button 
                 title="Descargar Reporte Fotográfico (PDF)"
                 variant="outline"
                 icon={<Feather name="file-text" size={18} color={colors.foreground} />}
-                onPress={handleDownloadPDF}
+                 onPress={() => void handleDownload('pdf')}
                 disabled={isGenerating}
                 loading={isGenerating}
               />

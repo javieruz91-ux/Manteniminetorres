@@ -6,12 +6,15 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { VisitFinding } from './visitFinding';
+import type { VisitPointFields } from './visitPointFields';
 import type { VisitPointStatus } from './visitPointStatus';
 
 export interface VisitPoint {
   /** @minLength 1 */
   id: string;
   title: string;
+  /** Template-driven responses keyed by catalog field id. */
+  fields?: VisitPointFields;
   status: VisitPointStatus;
   findings: VisitFinding[];
 }

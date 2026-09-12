@@ -29,6 +29,11 @@ import type {
   LogoutSuccess,
   MobileTokenExchangeRequest,
   MobileTokenExchangeSuccess,
+  TemplateDescriptor,
+  TemplateExportInput,
+  TemplateExportResponse,
+  TemplateImportInput,
+  TemplateMappingsPatch,
   UploadUrlRequest,
   UploadUrlResponse,
   VisitListResponse,
@@ -874,6 +879,347 @@ export function useGetVisit<TData = Awaited<ReturnType<typeof getVisit>>, TError
 
 
 
+
+export const getGetCurrentTemplateUrl = () => {
+
+
+
+
+  return `/api/templates/current`
+}
+
+/**
+ * @summary Get the owner's current Excel template descriptor, catalog, and audit
+ */
+export const getCurrentTemplate = async ( options?: Parameters<typeof customFetch>[1]): Promise<TemplateDescriptor> => {
+
+  return customFetch<TemplateDescriptor>(getGetCurrentTemplateUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetCurrentTemplateQueryKey = () => {
+    return [
+    `/api/templates/current`
+    ] as const;
+    }
+
+
+export const getGetCurrentTemplateQueryOptions = <TData = Awaited<ReturnType<typeof getCurrentTemplate>>, TError = ErrorType<ErrorEnvelope>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCurrentTemplate>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetCurrentTemplateQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCurrentTemplate>>> = ({ signal }) => getCurrentTemplate({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getCurrentTemplate>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetCurrentTemplateQueryResult = NonNullable<Awaited<ReturnType<typeof getCurrentTemplate>>>
+export type GetCurrentTemplateQueryError = ErrorType<ErrorEnvelope>
+
+
+/**
+ * @summary Get the owner's current Excel template descriptor, catalog, and audit
+ */
+
+export function useGetCurrentTemplate<TData = Awaited<ReturnType<typeof getCurrentTemplate>>, TError = ErrorType<ErrorEnvelope>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCurrentTemplate>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetCurrentTemplateQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getImportTemplateUrl = () => {
+
+
+
+
+  return `/api/templates/import`
+}
+
+/**
+ * @summary Parse and explicitly replace the owner's Excel source template
+ */
+export const importTemplate = async (templateImportInput: TemplateImportInput, options?: Parameters<typeof customFetch>[1]): Promise<TemplateDescriptor> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<TemplateDescriptor>(getImportTemplateUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(templateImportInput)
+  }
+);}
+
+
+
+
+
+export const getImportTemplateMutationKey = () => ['importTemplate'] as const;
+
+export const getImportTemplateMutationOptions = <TError = ErrorType<ErrorEnvelope>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof importTemplate>>, TError,ImportTemplateMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof importTemplate>>, TError,ImportTemplateMutationVariables, TContext> => {
+
+const mutationKey = getImportTemplateMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof importTemplate>>, ImportTemplateMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  importTemplate(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ImportTemplateMutationResult = NonNullable<Awaited<ReturnType<typeof importTemplate>>>
+    export type ImportTemplateMutationBody = BodyType<TemplateImportInput>
+    export type ImportTemplateMutationError = ErrorType<ErrorEnvelope>
+    export type ImportTemplateMutationVariables = {data: BodyType<TemplateImportInput>}
+
+    /**
+ * @summary Parse and explicitly replace the owner's Excel source template
+ */
+export const useImportTemplate = <TError = ErrorType<ErrorEnvelope>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof importTemplate>>, TError,ImportTemplateMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof importTemplate>>,
+        TError,
+        ImportTemplateMutationVariables,
+        TContext
+      > => {
+      return useMutation(getImportTemplateMutationOptions(options));
+    }
+
+export const getPatchTemplateMappingsUrl = () => {
+
+
+
+
+  return `/api/templates/mappings`
+}
+
+/**
+ * @summary Resolve or explicitly ignore unresolved template candidates
+ */
+export const patchTemplateMappings = async (templateMappingsPatch: TemplateMappingsPatch, options?: Parameters<typeof customFetch>[1]): Promise<TemplateDescriptor> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<TemplateDescriptor>(getPatchTemplateMappingsUrl(),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(templateMappingsPatch)
+  }
+);}
+
+
+
+
+
+export const getPatchTemplateMappingsMutationKey = () => ['patchTemplateMappings'] as const;
+
+export const getPatchTemplateMappingsMutationOptions = <TError = ErrorType<ErrorEnvelope>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof patchTemplateMappings>>, TError,PatchTemplateMappingsMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof patchTemplateMappings>>, TError,PatchTemplateMappingsMutationVariables, TContext> => {
+
+const mutationKey = getPatchTemplateMappingsMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof patchTemplateMappings>>, PatchTemplateMappingsMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  patchTemplateMappings(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PatchTemplateMappingsMutationResult = NonNullable<Awaited<ReturnType<typeof patchTemplateMappings>>>
+    export type PatchTemplateMappingsMutationBody = BodyType<TemplateMappingsPatch>
+    export type PatchTemplateMappingsMutationError = ErrorType<ErrorEnvelope>
+    export type PatchTemplateMappingsMutationVariables = {data: BodyType<TemplateMappingsPatch>}
+
+    /**
+ * @summary Resolve or explicitly ignore unresolved template candidates
+ */
+export const usePatchTemplateMappings = <TError = ErrorType<ErrorEnvelope>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof patchTemplateMappings>>, TError,PatchTemplateMappingsMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof patchTemplateMappings>>,
+        TError,
+        PatchTemplateMappingsMutationVariables,
+        TContext
+      > => {
+      return useMutation(getPatchTemplateMappingsMutationOptions(options));
+    }
+
+export const getExportTemplateUrl = () => {
+
+
+
+
+  return `/api/templates/export`
+}
+
+/**
+ * @summary Fill and export the original workbook without reconstructing its layout
+ */
+export const exportTemplate = async (templateExportInput: TemplateExportInput, options?: Parameters<typeof customFetch>[1]): Promise<TemplateExportResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<TemplateExportResponse>(getExportTemplateUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(templateExportInput)
+  }
+);}
+
+
+
+
+
+export const getExportTemplateMutationKey = () => ['exportTemplate'] as const;
+
+export const getExportTemplateMutationOptions = <TError = ErrorType<ErrorEnvelope>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof exportTemplate>>, TError,ExportTemplateMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof exportTemplate>>, TError,ExportTemplateMutationVariables, TContext> => {
+
+const mutationKey = getExportTemplateMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof exportTemplate>>, ExportTemplateMutationVariables> = (props) => {
+          const {data} = props ?? {};
+
+          return  exportTemplate(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ExportTemplateMutationResult = NonNullable<Awaited<ReturnType<typeof exportTemplate>>>
+    export type ExportTemplateMutationBody = BodyType<TemplateExportInput>
+    export type ExportTemplateMutationError = ErrorType<ErrorEnvelope>
+    export type ExportTemplateMutationVariables = {data: BodyType<TemplateExportInput>}
+
+    /**
+ * @summary Fill and export the original workbook without reconstructing its layout
+ */
+export const useExportTemplate = <TError = ErrorType<ErrorEnvelope>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof exportTemplate>>, TError,ExportTemplateMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof exportTemplate>>,
+        TError,
+        ExportTemplateMutationVariables,
+        TContext
+      > => {
+      return useMutation(getExportTemplateMutationOptions(options));
+    }
 
 export const getRequestUploadUrlUrl = () => {
 

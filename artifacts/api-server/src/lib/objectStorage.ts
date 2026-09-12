@@ -185,6 +185,32 @@ export class ObjectStorageService {
     return objectFile;
   }
 
+  /** Persist server-owned bytes while retaining the normal private object path
+   * format. This is used for immutable source workbooks; callers must never
+   * overwrite an existing version path. */
+  async saveObjectEntity(
+    objectPath: string,
+    bytes: Buffer,
+    contentType: string,
+  ): Promise<void> {
+    const file = await this.getObjectEntityFileForWrite(objectPath);
+    await file.save(bytes, {
+      resumable: false,
+      contentType,
+      metadata: { cacheControl: "private, no-store" },
+    });
+  }
+
+  private async getObjectEntityFileForWrite(objectPath: string): Promise<File> {
+    if (!objectPath.startsWith("/objects/")) throw new Error("Invalid object entity path");
+    const entityId = objectPath.slice("/objects/".length);
+    if (!entityId || entityId.includes("..")) throw new Error("Invalid object entity path");
+    let entityDir = this.getPrivateObjectDir();
+    if (!entityDir.endsWith("/")) entityDir += "/";
+    const { bucketName, objectName } = parseObjectPath(`${entityDir}${entityId}`);
+    return objectStorageClient.bucket(bucketName).file(objectName);
+  }
+
   async deleteObjectEntity(objectPath: string): Promise<void> {
     try {
       const objectFile = await this.getObjectEntityFile(objectPath);

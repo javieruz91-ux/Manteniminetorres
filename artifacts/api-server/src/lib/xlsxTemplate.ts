@@ -1,0 +1,825 @@
+import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
+
+const execFileAsync = promisify(execFile);
+
+export const EXPECTED_SHEETS = [
+  ["PRESENTACION", 8, 24],
+  ["(HW) ALARMAS DE FUERZA", 10, 81],
+  ["PLANTA HUAWEI", 20, 70],
+  ["INFRAESTRUCTURA", 13, 278],
+  ["ELECTROMECANICA", 13, 141],
+  ["TIERRAS", 12, 80],
+  ["TRANSMISION", 11, 32],
+  ["HOJA DE SEG", 8, 42],
+  ["REPORTE FOTOGRAFICO", 13, 211],
+  ["base", 1, 1],
+] as const;
+
+export type ResponseType =
+  | "text" | "number" | "date" | "selection" | "measurement" | "observation" | "status";
+export type TemplateField = {
+  id: string; sheet: string; subsection: string; key: string; label: string;
+  responseType: ResponseType; options: string[]; required: boolean;
+  applicability: string; evidenceSlot: "photo" | "observation" | "none";
+  target: string; sourceEvidence: string; confidence: number;
+  state: "mapped" | "ignored" | "unresolved"; ignoreReason: string | null;
+};
+export type TemplateCandidate = {
+  target: string; sheet: string; reason: string; confidence: number;
+  state: "unresolved" | "ignored"; ignoreReason: string | null;
+};
+export type TemplateCatalog = {
+  catalog: TemplateField[]; unmapped: TemplateCandidate[];
+  audit: Array<Record<string, unknown>>; ready: boolean;
+};
+export type TemplateVerification = {
+  valid: boolean; sheets: string[]; writtenTargets: string[]; details: string[];
+};
+export type EvidencePhoto = {
+  id: string;
+  bytes: Buffer;
+  contentType: string;
+};
+
+function unescapeXml(value: string): string {
+  return value.replace(/&(#x?[0-9a-f]+|amp|lt|gt|quot|apos);/gi, (_, entity: string) => {
+    if (entity.toLowerCase() === "amp") return "&";
+    if (entity.toLowerCase() === "lt") return "<";
+    if (entity.toLowerCase() === "gt") return ">";
+    if (entity.toLowerCase() === "quot") return '"';
+    if (entity.toLowerCase() === "apos") return "'";
+    const hex = entity[0].toLowerCase() === "x";
+    return String.fromCodePoint(parseInt(entity.slice(hex ? 1 : 0), hex ? 16 : 10));
+  });
+}
+function escapeXml(value: string): string {
+  return value.replace(/[<>&'"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" })[c]!);
+}
+function attr(xml: string, name: string): string | undefined {
+  const m = new RegExp(`\\b${name}="([^"]*)"`, "i").exec(xml);
+  return m ? unescapeXml(m[1]) : undefined;
+}
+function colNumber(ref: string): number {
+  const letters = /^([A-Z]+)/i.exec(ref)?.[1].toUpperCase() ?? "";
+  return [...letters].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
+}
+function cellRef(row: number, col: number): string {
+  let letters = "";
+  for (let n = col; n; n = Math.floor((n - 1) / 26)) letters = String.fromCharCode(65 + ((n - 1) % 26)) + letters;
+  return `${letters}${row}`;
+}
+function textNodes(xml: string, tag: string): string[] {
+  return [...xml.matchAll(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, "gi"))]
+    .map((m) => unescapeXml(m[1].replace(/<[^>]+>/g, "")));
+}
+
+type ZipEntry = {
+  name: string;
+  central: Buffer;
+  local: Buffer;
+  compressed: Buffer;
+  data: Buffer;
+  method: number;
+};
+function zipEntries(input: Buffer): { entries: ZipEntry[]; comment: Buffer } {
+  const eocd = input.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (eocd < 0) throw new Error("El archivo no es un ZIP OOXML válido");
+  const count = input.readUInt16LE(eocd + 10);
+  const centralSize = input.readUInt32LE(eocd + 12);
+  const centralOffset = input.readUInt32LE(eocd + 16);
+  const entries: ZipEntry[] = [];
+  let cursor = centralOffset;
+  for (let i = 0; i < count; i++) {
+    if (input.readUInt32LE(cursor) !== 0x02014b50) throw new Error("Directorio ZIP OOXML inválido");
+    const centralLen = 46 + input.readUInt16LE(cursor + 28) + input.readUInt16LE(cursor + 30) + input.readUInt16LE(cursor + 32);
+    const central = Buffer.from(input.subarray(cursor, cursor + centralLen));
+    const nameLen = input.readUInt16LE(cursor + 28);
+    const name = input.subarray(cursor + 46, cursor + 46 + nameLen).toString();
+    const localOffset = input.readUInt32LE(cursor + 42);
+    if (input.readUInt32LE(localOffset) !== 0x04034b50) throw new Error("Cabecera local ZIP OOXML inválida");
+    const localLen = 30 + input.readUInt16LE(localOffset + 26) + input.readUInt16LE(localOffset + 28);
+    const compressedLen = input.readUInt32LE(cursor + 20);
+    const local = Buffer.from(input.subarray(localOffset, localOffset + localLen + compressedLen));
+    const compressed = input.subarray(localOffset + localLen, localOffset + localLen + compressedLen);
+    const method = input.readUInt16LE(cursor + 10);
+    let data: Buffer;
+    if (method === 0) data = Buffer.from(compressed);
+    else if (method === 8) data = inflateRawSync(compressed);
+    else throw new Error(`Compresión ZIP no soportada en ${name}`);
+    entries.push({ name, central, local, compressed: Buffer.from(compressed), data, method });
+    cursor += centralLen;
+  }
+  return { entries, comment: Buffer.from(input.subarray(eocd + 22, eocd + 22 + input.readUInt16LE(eocd + 20))) };
+}
+function zipXml(entries: ReturnType<typeof zipEntries>["entries"], comment: Buffer): Buffer {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const entry of entries) {
+    // Data-descriptor ZIPs (general-purpose bit 3) are common in streamed
+    // workbook writers. Rebuild every local header from the central directory
+    // and clear bit 3 so no stale descriptor bytes or sizes survive.
+    const local = rebuildLocalHeader(entry);
+    entry.local = local;
+    locals.push(local);
+    const central = Buffer.from(entry.central);
+    central.writeUInt16LE(central.readUInt16LE(8) & ~0x0008, 8);
+    central.writeUInt32LE(offset, 42);
+    centrals.push(central);
+    offset += local.length;
+  }
+  const cd = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22 + comment.length);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8); eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(offset, 16); eocd.writeUInt16LE(comment.length, 20);
+  comment.copy(eocd, 22);
+  return Buffer.concat([...locals, cd, eocd]);
+}
+
+function newStoredEntry(name: string, data: Buffer): ZipEntry {
+  const nameBytes = Buffer.from(name);
+  const checksum = crc32(data);
+  const local = Buffer.alloc(30 + nameBytes.length);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt16LE(0, 6);
+  local.writeUInt16LE(0, 8);
+  local.writeUInt32LE(checksum, 14);
+  local.writeUInt32LE(data.length, 18);
+  local.writeUInt32LE(data.length, 22);
+  local.writeUInt16LE(nameBytes.length, 26);
+  nameBytes.copy(local, 30);
+  const central = Buffer.alloc(46 + nameBytes.length);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6);
+  central.writeUInt16LE(0, 8); central.writeUInt16LE(0, 10);
+  central.writeUInt32LE(checksum, 16);
+  central.writeUInt32LE(data.length, 20); central.writeUInt32LE(data.length, 24);
+  central.writeUInt16LE(nameBytes.length, 28);
+  nameBytes.copy(central, 46);
+  return { name, central, local: Buffer.concat([local, data]), compressed: data, data, method: 0 };
+}
+
+function normalizePackagePath(base: string, target: string): string {
+  const parts = `${base}/${target}`.split("/");
+  const result: string[] = [];
+  for (const part of parts) {
+    if (!part || part === ".") continue;
+    if (part === "..") result.pop();
+    else result.push(part);
+  }
+  return result.join("/");
+}
+
+function nextRelationshipId(xml: string): string {
+  let max = 0;
+  for (const match of xml.matchAll(/\bId="rId(\d+)"/g)) max = Math.max(max, Number(match[1]));
+  return `rId${max + 1}`;
+}
+
+function nextDrawingShapeId(xml: string): number {
+  let max = 0;
+  for (const match of xml.matchAll(/\bcNvPr\b[^>]*\bid="(\d+)"/g)) max = Math.max(max, Number(match[1]));
+  return max + 1;
+}
+
+function evidenceAnchor(ref: string, relationshipId: string, shapeId: number, name: string): string {
+  const [start, end = start] = ref.split(":").map((part) => part.trim());
+  const startCol = colNumber(start) - 1;
+  const startRow = Number(start.replace(/\D/g, "")) - 1;
+  const endCol = colNumber(end);
+  const endRow = Number(end.replace(/\D/g, ""));
+  return `<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>${startCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${startRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>${endCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${endRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${shapeId}" name="${escapeXml(name)}"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${relationshipId}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:twoCellAnchor>`;
+}
+
+function shiftCellReference(value: string, rowOffset: number): string {
+  return value.replace(/(\$?[A-Z]{1,3}\$?)(\d+)/g, (_match, column: string, row: string) =>
+    `${column}${Number(row) + rowOffset}`);
+}
+
+function shiftReferenceAttributes(xml: string, rowOffset: number): string {
+  return xml
+    .replace(/\b(r|ref|sqref|formula)="([^"]*)"/gi, (_match, name: string, value: string) =>
+      `${name}="${name.toLowerCase() === "r" && /^\d+$/.test(value) ? Number(value) + rowOffset : value.split(/\s+/).map((part) => shiftCellReference(part, rowOffset)).join(" ")}"`)
+    .replace(/<f(\b[^>]*)>([\s\S]*?)<\/f>/gi, (_match, attrs: string, formula: string) =>
+      `<f${attrs}>${shiftCellReference(formula, rowOffset)}</f>`);
+}
+
+function updateEntryData(entry: ZipEntry, data: Buffer): void {
+  entry.data = data;
+  entry.compressed = deflateRawSync(data);
+  entry.method = 8;
+  const headerLen = 30 + entry.local.readUInt16LE(26) + entry.local.readUInt16LE(28);
+  entry.local = Buffer.concat([entry.local.subarray(0, headerLen), entry.compressed]);
+  entry.central.writeUInt16LE(8, 10);
+  entry.central.writeUInt32LE(crc32(data), 16);
+  entry.central.writeUInt32LE(entry.compressed.length, 20);
+  entry.central.writeUInt32LE(data.length, 24);
+}
+
+function cloneEvidenceBlocks(entries: ZipEntry[], sheet: { path: string }, pages: number): void {
+  if (pages <= 1) return;
+  const worksheet = entries.find((entry) => entry.name === sheet.path);
+  if (!worksheet) throw new Error("Falta XML de REPORTE FOTOGRAFICO");
+  let xml = xmlData(worksheet);
+  const rows = new Map<number, string>();
+  for (const match of xml.matchAll(/<row\b[^>]*\br="(\d+)"[^>]*(?:\/>|>[\s\S]*?<\/row\s*>)/gi)) {
+    const row = Number(match[1]);
+    if (row >= 1 && row <= 211) rows.set(row, match[0]);
+  }
+  if (rows.size === 0) throw new Error("REPORTE FOTOGRAFICO no contiene filas clonables en el bloque base A1:M211");
+  const sheetDataClose = xml.indexOf("</sheetData>");
+  if (sheetDataClose < 0) throw new Error("REPORTE FOTOGRAFICO carece de sheetData");
+  let clones = "";
+  for (let page = 1; page < pages; page++) {
+    const offset = page * 211;
+    clones += [...rows.entries()].map(([, rowXml]) => shiftReferenceAttributes(rowXml, offset)).join("");
+  }
+  xml = `${xml.slice(0, sheetDataClose)}${clones}${xml.slice(sheetDataClose)}`;
+  xml = xml.replace(/(<dimension\b[^>]*\bref=")[^"]+(")/i, `$1A1:M${211 * pages}$2`);
+  const mergeContainer = /<mergeCells\b[^>]*>([\s\S]*?)<\/mergeCells>/i.exec(xml);
+  if (mergeContainer) {
+    const source = mergeContainer[1];
+    let extra = "";
+    for (let page = 1; page < pages; page++) extra += source.replace(/<mergeCell\b[^>]*\/>/gi, (merge) => shiftReferenceAttributes(merge, page * 211));
+    xml = xml.replace(mergeContainer[0], mergeContainer[0].replace("</mergeCells>", `${extra}</mergeCells>`));
+  }
+  const dataValidationMatches = [...xml.matchAll(/<dataValidation\b[^>]*\/>|<dataValidation\b[^>]*>[\s\S]*?<\/dataValidation\s*>/gi)]
+    .map((match) => match[0]).filter((item) => /\bsqref="/i.test(item));
+  if (dataValidationMatches.length) {
+    const extra = dataValidationMatches.map((item) =>
+      [...Array(pages - 1)].map((_, page) => shiftReferenceAttributes(item, (page + 1) * 211)).join(""),
+    ).join("");
+    const container = /<\/dataValidations>/i.exec(xml);
+    if (container) xml = `${xml.slice(0, container.index)}${extra}${xml.slice(container.index)}`;
+  }
+  const conditionalMatches = [...xml.matchAll(/<conditionalFormatting\b[^>]*>[\s\S]*?<\/conditionalFormatting\s*>/gi)].map((match) => match[0]);
+  if (conditionalMatches.length) {
+    const extra = conditionalMatches.map((item) => [...Array(pages - 1)].map((_, page) => shiftReferenceAttributes(item, (page + 1) * 211)).join("")).join("");
+    const before = xml.indexOf("</worksheet>");
+    xml = `${xml.slice(0, before)}${extra}${xml.slice(before)}`;
+  }
+  const hyperlinkMatches = [...xml.matchAll(/<hyperlink\b[^>]*\/>/gi)].map((match) => match[0]).filter((item) => /\bref="/i.test(item));
+  if (hyperlinkMatches.length) {
+    const extra = hyperlinkMatches.map((item) => [...Array(pages - 1)].map((_, page) => shiftReferenceAttributes(item, (page + 1) * 211)).join("")).join("");
+    const container = /<\/hyperlinks>/i.exec(xml);
+    if (container) xml = `${xml.slice(0, container.index)}${extra}${xml.slice(container.index)}`;
+  }
+  const breakMatches = [...xml.matchAll(/<brk\b[^>]*\bid="(\d+)"[^>]*\/>/gi)].map((match) => match[0]);
+  if (breakMatches.length) {
+    const extra = breakMatches.map((item) => [...Array(pages - 1)].map((_, page) =>
+      item.replace(/\bid="(\d+)"/i, (_m, id) => `id="${Number(id) + page * 211}"`).replace(/\b(max|man)="(\d+)"/gi, (_m, name, row) => `${name}="${Number(row) + page * 211}"`),
+    ).join("")).join("");
+    const container = /<\/rowBreaks>/i.exec(xml);
+    if (container) xml = `${xml.slice(0, container.index)}${extra}${xml.slice(container.index)}`;
+  }
+  updateEntryData(worksheet, Buffer.from(xml));
+
+  const worksheetRelsPath = `${sheet.path.slice(0, sheet.path.lastIndexOf("/"))}/_rels/${sheet.path.slice(sheet.path.lastIndexOf("/") + 1)}.rels`;
+  const worksheetRels = entries.find((entry) => entry.name === worksheetRelsPath);
+  const drawingRel = worksheetRels && [...xmlData(worksheetRels).matchAll(/<Relationship\b([^>]*)\/?>/g)]
+    .map((match) => ({ type: attr(match[1], "Type"), target: attr(match[1], "Target") }))
+    .find((relationship) => relationship.type?.endsWith("/drawing"));
+  if (drawingRel?.target) {
+    const drawingPath = normalizePackagePath(sheet.path.slice(0, sheet.path.lastIndexOf("/")), drawingRel.target);
+    const drawing = entries.find((entry) => entry.name === drawingPath);
+    if (drawing) {
+      let drawingXml = xmlData(drawing);
+      const anchors = [...drawingXml.matchAll(/<xdr:(?:twoCellAnchor|oneCellAnchor)\b[\s\S]*?<\/xdr:(?:twoCellAnchor|oneCellAnchor)\s*>/gi)]
+        .map((match) => match[0])
+        .filter((anchor) => {
+          const rows = [...anchor.matchAll(/<xdr:row>(\d+)<\/xdr:row>/gi)].map((match) => Number(match[1]));
+          return rows.length > 0 && rows.every((row) => row < 211);
+        });
+      let anchorClones = "";
+      for (let page = 1; page < pages; page++) {
+        const offset = page * 211;
+        anchorClones += anchors.map((anchor) => anchor
+          .replace(/(<xdr:row>)(\d+)(<\/xdr:row>)/gi, (_m, open, row, close) =>
+            `${open}${Number(row) + offset}${close}`)
+          .replace(/(<xdr:cNvPr\b[^>]*\bid=")(\d+)(")/gi, (_m, open, id, close) =>
+            `${open}${Number(id) + page * 10000}${close}`)).join("");
+      }
+      drawingXml = drawingXml.replace(/<\/xdr:wsDr\s*>\s*$/i, `${anchorClones}</xdr:wsDr>`);
+      updateEntryData(drawing, Buffer.from(drawingXml));
+    }
+  }
+
+  const workbook = entries.find((entry) => entry.name === "xl/workbook.xml");
+  if (workbook) {
+    let workbookXml = xmlData(workbook);
+    workbookXml = workbookXml.replace(/(<definedName\b[^>]*name="_xlnm\.Print_Area"[^>]*>)([\s\S]*?)(<\/definedName>)/gi,
+      (match, open: string, body: string, close: string) =>
+        body.includes("REPORTE FOTOGRAFICO") || body.includes("REPORTE%20FOTOGRAFICO")
+          ? `${open}${body.replace(/(\$M\$?)\d+/g, `$1${211 * pages}`)}${close}` : match);
+    updateEntryData(workbook, Buffer.from(workbookXml));
+  }
+}
+
+export function embedEvidence(
+  bytes: Buffer,
+  photos: EvidencePhoto[],
+  catalog: TemplateField[],
+): { bytes: Buffer; consumedPhotoIds: string[]; details: string[]; valid: boolean } {
+  const parsed = zipEntries(bytes);
+  const sheets = workbookSheets(parsed.entries);
+  const photoFields = catalog
+    .filter((field) => field.state === "mapped" && field.sheet === "REPORTE FOTOGRAFICO" && field.evidenceSlot === "photo")
+    .sort((a, b) => a.target.localeCompare(b.target));
+  if (photos.length === 0) return { bytes, consumedPhotoIds: [], details: [], valid: true };
+  if (photoFields.length === 0) {
+    return { bytes, consumedPhotoIds: [], details: ["No hay slots REPORTE FOTOGRAFICO mapeados para fotografías"], valid: false };
+  }
+  const sheet = sheets.find((item) => item.name === "REPORTE FOTOGRAFICO");
+  if (!sheet) return { bytes, consumedPhotoIds: [], details: ["Falta REPORTE FOTOGRAFICO"], valid: false };
+  const worksheet = parsed.entries.find((entry) => entry.name === sheet.path);
+  if (!worksheet) return { bytes, consumedPhotoIds: [], details: ["Falta XML de REPORTE FOTOGRAFICO"], valid: false };
+  const baseDimension = attr(/<dimension\b([^>]*)\/?>/i.exec(xmlData(worksheet))?.[1] ?? "", "ref");
+  if (baseDimension !== "A1:M211") {
+    return { bytes, consumedPhotoIds: [], details: ["REPORTE FOTOGRAFICO no tiene la dimensión base A1:M211"], valid: false };
+  }
+  const pages = Math.max(1, Math.ceil(photos.length / photoFields.length));
+  cloneEvidenceBlocks(parsed.entries, sheet, pages);
+  const worksheetRelsPath = `${sheet.path.slice(0, sheet.path.lastIndexOf("/"))}/_rels/${sheet.path.slice(sheet.path.lastIndexOf("/") + 1)}.rels`;
+  let worksheetRels = parsed.entries.find((entry) => entry.name === worksheetRelsPath);
+  let worksheetRelsXml = worksheetRels ? xmlData(worksheetRels) : `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
+  let worksheetXml = xmlData(worksheet);
+  const drawingMatch = /<drawing\b[^>]*\br:id="([^"]+)"[^>]*\/?>/i.exec(worksheetXml);
+  let drawingPath: string;
+  let drawingRelsPath: string;
+  let drawingRelId: string;
+  let drawing: ZipEntry;
+  let drawingRels: ZipEntry | undefined;
+  let drawingRelsXml: string;
+  let createdDrawing = false;
+  if (drawingMatch) {
+    drawingRelId = drawingMatch[1];
+    const relationship = [...worksheetRelsXml.matchAll(/<Relationship\b([^>]*)\/?>/g)]
+      .map((match) => ({ id: attr(match[1], "Id"), target: attr(match[1], "Target") }))
+      .find((item) => item.id === drawingRelId);
+    if (!relationship?.target) return { bytes, consumedPhotoIds: [], details: ["La relación de drawing existente no es resoluble"], valid: false };
+    drawingPath = normalizePackagePath(sheet.path.slice(0, sheet.path.lastIndexOf("/")), relationship.target);
+    drawing = parsed.entries.find((entry) => entry.name === drawingPath)!;
+    if (!drawing) return { bytes, consumedPhotoIds: [], details: ["Falta el drawing existente"], valid: false };
+    drawingRelsPath = `${drawingPath.slice(0, drawingPath.lastIndexOf("/"))}/_rels/${drawingPath.slice(drawingPath.lastIndexOf("/") + 1)}.rels`;
+    drawingRels = parsed.entries.find((entry) => entry.name === drawingRelsPath);
+    drawingRelsXml = drawingRels ? xmlData(drawingRels) : `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
+  } else {
+    createdDrawing = true;
+    const drawingNumber = parsed.entries.filter((entry) => /^xl\/drawings\/drawing\d+\.xml$/.test(entry.name)).length + 1;
+    drawingPath = `xl/drawings/drawing${drawingNumber}.xml`;
+    drawing = newStoredEntry(drawingPath, Buffer.from(`<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"></xdr:wsDr>`));
+    parsed.entries.push(drawing);
+    drawingRelId = nextRelationshipId(worksheetRelsXml);
+    worksheetRelsXml = worksheetRelsXml.replace("</Relationships>", `<Relationship Id="${drawingRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/${drawingPath.split("/").pop()}"/></Relationships>`);
+    drawingRelsPath = `xl/drawings/_rels/${drawingPath.split("/").pop()}.rels`;
+    drawingRelsXml = `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
+  }
+  const shapeStart = nextDrawingShapeId(xmlData(drawing));
+  const consumedPhotoIds: string[] = [];
+  let drawingXml = xmlData(drawing);
+  for (let index = 0; index < photos.length; index++) {
+    const photo = photos[index];
+    const extension = photo.contentType.includes("png") ? "png" : photo.contentType.includes("jpeg") || photo.contentType.includes("jpg") ? "jpg" : "";
+    if (!extension) return { bytes, consumedPhotoIds, details: [`Tipo de imagen no soportado para ${photo.id}`], valid: false };
+    const mediaPath = `xl/media/template-${sha256(photo.bytes).slice(0, 16)}-${index}.${extension}`;
+    if (!parsed.entries.some((entry) => entry.name === mediaPath)) parsed.entries.push(newStoredEntry(mediaPath, photo.bytes));
+    const relationshipId = nextRelationshipId(drawingRelsXml);
+    drawingRelsXml = drawingRelsXml.replace("</Relationships>", `<Relationship Id="${relationshipId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${mediaPath.split("/").pop()}"/></Relationships>`);
+    const slotRef = photoFields[index % photoFields.length].target.split("!")[1];
+    const pageOffset = Math.floor(index / photoFields.length) * 211;
+    drawingXml = drawingXml.replace(/<\/(?:xdr:wsDr|wsDr)>\s*$/i,
+      `${evidenceAnchor(shiftCellReference(slotRef, pageOffset), relationshipId, shapeStart + index, `Evidence ${photo.id}`)}</xdr:wsDr>`);
+    consumedPhotoIds.push(photo.id);
+  }
+  drawing.data = Buffer.from(drawingXml);
+  drawing.compressed = deflateRawSync(drawing.data);
+  drawing.method = 8;
+  const drawingHeaderLen = 30 + drawing.local.readUInt16LE(26) + drawing.local.readUInt16LE(28);
+  drawing.local = Buffer.concat([drawing.local.subarray(0, drawingHeaderLen), drawing.compressed]);
+  drawing.central.writeUInt16LE(8, 10);
+  drawing.central.writeUInt32LE(crc32(drawing.data), 16);
+  drawing.central.writeUInt32LE(drawing.compressed.length, 20);
+  drawing.central.writeUInt32LE(drawing.data.length, 24);
+  if (!drawingRels) {
+    drawingRels = newStoredEntry(drawingRelsPath, Buffer.from(drawingRelsXml));
+    parsed.entries.push(drawingRels);
+  } else {
+    drawingRels.data = Buffer.from(drawingRelsXml);
+    drawingRels.compressed = deflateRawSync(drawingRels.data);
+    drawingRels.method = 8;
+    const headerLen = 30 + drawingRels.local.readUInt16LE(26) + drawingRels.local.readUInt16LE(28);
+    drawingRels.local = Buffer.concat([drawingRels.local.subarray(0, headerLen), drawingRels.compressed]);
+    drawingRels.central.writeUInt16LE(8, 10);
+    drawingRels.central.writeUInt32LE(crc32(drawingRels.data), 16);
+    drawingRels.central.writeUInt32LE(drawingRels.compressed.length, 20);
+    drawingRels.central.writeUInt32LE(drawingRels.data.length, 24);
+  }
+  if (!worksheetRels) {
+    worksheetRels = newStoredEntry(worksheetRelsPath, Buffer.from(worksheetRelsXml));
+    parsed.entries.push(worksheetRels);
+  } else {
+    worksheetRels.data = Buffer.from(worksheetRelsXml);
+    worksheetRels.compressed = deflateRawSync(worksheetRels.data);
+    worksheetRels.method = 8;
+    const headerLen = 30 + worksheetRels.local.readUInt16LE(26) + worksheetRels.local.readUInt16LE(28);
+    worksheetRels.local = Buffer.concat([worksheetRels.local.subarray(0, headerLen), worksheetRels.compressed]);
+    worksheetRels.central.writeUInt16LE(8, 10);
+    worksheetRels.central.writeUInt32LE(crc32(worksheetRels.data), 16);
+    worksheetRels.central.writeUInt32LE(worksheetRels.compressed.length, 20);
+    worksheetRels.central.writeUInt32LE(worksheetRels.data.length, 24);
+  }
+  if (!drawingMatch) worksheetXml = worksheetXml.replace("</worksheet>", `<drawing r:id="${drawingRelId}"/></worksheet>`);
+  worksheet.data = Buffer.from(worksheetXml);
+  worksheet.compressed = deflateRawSync(worksheet.data);
+  worksheet.method = 8;
+  const worksheetHeaderLen = 30 + worksheet.local.readUInt16LE(26) + worksheet.local.readUInt16LE(28);
+  worksheet.local = Buffer.concat([worksheet.local.subarray(0, worksheetHeaderLen), worksheet.compressed]);
+  worksheet.central.writeUInt16LE(8, 10);
+  worksheet.central.writeUInt32LE(crc32(worksheet.data), 16);
+  worksheet.central.writeUInt32LE(worksheet.compressed.length, 20);
+  worksheet.central.writeUInt32LE(worksheet.data.length, 24);
+  const contentTypes = parsed.entries.find((entry) => entry.name === "[Content_Types].xml");
+  if (contentTypes) {
+    let contentXml = xmlData(contentTypes);
+    if (!/<Default\b[^>]*Extension="png"/i.test(contentXml)) contentXml = contentXml.replace("</Types>", `<Default Extension="png" ContentType="image/png"/></Types>`);
+    if (!/<Default\b[^>]*Extension="jpg"/i.test(contentXml)) contentXml = contentXml.replace("</Types>", `<Default Extension="jpg" ContentType="image/jpeg"/></Types>`);
+    const drawingPart = `/xl/drawings/${drawingPath.split("/").pop()}`;
+    if (createdDrawing && !new RegExp(`<Override\\b[^>]*PartName="${drawingPart.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "i").test(contentXml)) {
+      contentXml = contentXml.replace("</Types>", `<Override PartName="${drawingPart}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>`);
+    }
+    contentTypes.data = Buffer.from(contentXml); contentTypes.compressed = deflateRawSync(contentTypes.data); contentTypes.method = 8;
+    const headerLen = 30 + contentTypes.local.readUInt16LE(26) + contentTypes.local.readUInt16LE(28);
+    contentTypes.local = Buffer.concat([contentTypes.local.subarray(0, headerLen), contentTypes.compressed]);
+    contentTypes.central.writeUInt16LE(8, 10); contentTypes.central.writeUInt32LE(crc32(contentTypes.data), 16);
+    contentTypes.central.writeUInt32LE(contentTypes.compressed.length, 20); contentTypes.central.writeUInt32LE(contentTypes.data.length, 24);
+  } else {
+    parsed.entries.push(newStoredEntry("[Content_Types].xml", Buffer.from(
+      `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="png" ContentType="image/png"/><Default Extension="jpg" ContentType="image/jpeg"/><Override PartName="/${drawingPath}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>`,
+    )));
+  }
+  const result = zipXml(parsed.entries, parsed.comment);
+  const allPresent = consumedPhotoIds.length === photos.length && consumedPhotoIds.every((id) => {
+    const media = parsed.entries.some((entry) => entry.name.includes(sha256(photos.find((photo) => photo.id === id)!.bytes).slice(0, 16)));
+    return media && drawingXml.includes(`Evidence ${id}`);
+  });
+  const expectedDimension = `A1:M${211 * pages}`;
+  const dimensionValid = attr(
+    /<dimension\b([^>]*)\/?>/i.exec(xmlData(parsed.entries.find((entry) => entry.name === sheet.path)!))?.[1] ?? "",
+    "ref",
+  ) === expectedDimension;
+  return { bytes: result, consumedPhotoIds, details: allPresent && dimensionValid
+    ? [`${consumedPhotoIds.length} fotografías embebidas en ${pages} bloque(s) A1:M211`]
+    : ["No se pudieron verificar todas las fotografías embebidas o la dimensión esperada"], valid: allPresent && dimensionValid };
+}
+
+function rebuildLocalHeader(entry: ZipEntry): Buffer {
+  const nameLen = entry.local.readUInt16LE(26);
+  const extraLen = entry.local.readUInt16LE(28);
+  const header = Buffer.from(entry.local.subarray(0, 30 + nameLen + extraLen));
+  header.writeUInt16LE(header.readUInt16LE(6) & ~0x0008, 6);
+  header.writeUInt16LE(entry.central.readUInt16LE(10), 8);
+  header.writeUInt32LE(entry.central.readUInt32LE(16), 14);
+  header.writeUInt32LE(entry.central.readUInt32LE(20), 18);
+  header.writeUInt32LE(entry.central.readUInt32LE(24), 22);
+  return Buffer.concat([header, entry.compressed]);
+}
+function xmlData(entry: ZipEntry): string {
+  return entry.data.toString("utf8");
+}
+
+function validateWorkbookStructure(entries: ZipEntry[], evidencePages = 1): string[] {
+  const sheets = workbookSheets(entries);
+  if (sheets.length !== EXPECTED_SHEETS.length) throw new Error("La plantilla debe tener exactamente diez hojas");
+  const expected = new Map<string, { cols: number; rows: number }>(
+    EXPECTED_SHEETS.map(([name, cols, rows]) => [name, { cols, rows }]),
+  );
+  sheets.forEach((sheet, index) => {
+    const expectedSheet = EXPECTED_SHEETS[index];
+    const dims = expected.get(sheet.name);
+    if (!dims || expectedSheet[0] !== sheet.name) throw new Error(`Hoja ${index + 1} inválida: se esperaba ${expectedSheet?.[0] ?? "ninguna"}`);
+    const entry = entries.find((e) => e.name === sheet.path);
+    if (!entry) throw new Error(`Falta el XML de la hoja ${sheet.name}`);
+    const dimension = attr(/<dimension\b([^>]*)\/?>/i.exec(xmlData(entry))?.[1] ?? "", "ref");
+    const expectedRef = cellRef(sheet.name === "REPORTE FOTOGRAFICO" ? dims.rows * evidencePages : dims.rows, dims.cols);
+    if (sheet.name === "base" ? dimension !== "A1" : dimension !== `A1:${expectedRef}`) {
+      throw new Error(`Dimensión inválida en ${sheet.name}: ${dimension ?? "desconocida"}`);
+    }
+  });
+  return sheets.map((sheet) => sheet.name);
+}
+
+function workbookSheets(entries: ZipEntry[]): Array<{ name: string; path: string }> {
+  const workbook = entries.find((e) => e.name === "xl/workbook.xml");
+  const rels = entries.find((e) => e.name === "xl/_rels/workbook.xml.rels");
+  if (!workbook || !rels) throw new Error("OOXML sin workbook.xml o relaciones");
+  const targets = new Map<string, string>();
+  for (const m of xmlData(rels).matchAll(/<Relationship\b([^>]*)\/?>/g)) {
+    const id = attr(m[1], "Id"); const target = attr(m[1], "Target");
+    if (id && target) targets.set(id, target.startsWith("/") ? target.slice(1) : `xl/${target.replace(/^\.?\//, "")}`);
+  }
+  return [...xmlData(workbook).matchAll(/<sheet\b([^>]*)\/?>/g)].map((m) => ({
+    name: attr(m[1], "name") ?? "", path: targets.get(attr(m[1], "r:id") ?? "") ?? "",
+  }));
+}
+
+export function sha256(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+export function parseTemplate(bytes: Buffer): TemplateCatalog {
+  const { entries } = zipEntries(bytes);
+  const sheets = workbookSheets(entries);
+  validateWorkbookStructure(entries);
+  const audit: Array<Record<string, unknown>> = [];
+  const expected = new Map<string, { cols: number; rows: number }>(
+    EXPECTED_SHEETS.map(([name, cols, rows]) => [name, { cols, rows }]),
+  );
+  const shared = entries.find((e) => e.name === "xl/sharedStrings.xml");
+  const sharedStrings = shared ? textNodes(xmlData(shared), "si").map((s) => s) : [];
+  const workbookValues = new Map<string, Map<string, string>>();
+  for (const sheet of sheets) {
+    const entry = entries.find((item) => item.name === sheet.path);
+    if (!entry) continue;
+    const values = new Map<string, string>();
+    for (const cell of xmlData(entry).matchAll(/<c\b([^>]*?)>([\s\S]*?)<\/c>|<c\b([^>]*?)\/>/g)) {
+      const head = cell[1] ?? cell[3] ?? ""; const body = cell[2] ?? "";
+      const ref = attr(head, "r"); if (!ref) continue;
+      const type = attr(head, "t") ?? ""; const raw = textNodes(body, "v")[0] ?? textNodes(body, "t").join("");
+      values.set(ref, type === "s" ? (sharedStrings[Number(raw)] ?? "") : unescapeXml(raw));
+    }
+    workbookValues.set(sheet.name, values);
+  }
+  const validationOptions = (formula: string): string[] => {
+    const range = formula.match(/^\s*=?\s*(?:'([^']+)'|([^!]+))!\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)/i);
+    if (!range) return (formula.match(/"([^"]+)"/)?.[1] ?? formula).split(",").map((item) => item.trim()).filter(Boolean);
+    const source = workbookValues.get(range[1] ?? range[2]);
+    if (!source) return [];
+    const values: string[] = [];
+    const startCol = colNumber(range[3]); const endCol = colNumber(range[5]);
+    for (let row = Number(range[4]); row <= Number(range[6]); row++) {
+      for (let col = startCol; col <= endCol; col++) {
+        const value = source.get(cellRef(row, col)); if (value) values.push(value);
+      }
+    }
+    return values;
+  };
+  const styles = entries.find((e) => e.name === "xl/styles.xml");
+  const unlocked = new Set<number>();
+  if (styles) {
+    const styleXml = xmlData(styles);
+    const cellXfs = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/i.exec(styleXml)?.[1] ?? "";
+    const xfs = cellXfs.match(/<xf\b[^>]*(?:\/>|>[\s\S]*?<\/xf>)/g) ?? [];
+    xfs.forEach((xf, i) => { if (/<protection\b[^>]*locked="0"/i.test(xf)) unlocked.add(i); });
+  }
+  const catalog: TemplateField[] = [];
+  const unmapped: TemplateCandidate[] = [];
+  sheets.forEach((sheet, index) => {
+    const dims = expected.get(sheet.name);
+    if (!dims) throw new Error(`Hoja ${index + 1} inválida: ${sheet.name}`);
+    const entry = entries.find((e) => e.name === sheet.path);
+    if (!entry) throw new Error(`Falta el XML de la hoja ${sheet.name}`);
+    const xml = xmlData(entry);
+    if (sheet.name === "base") return;
+    const merged = [...xml.matchAll(/<mergeCell\b[^>]*ref="([^"]+)"/gi)].map((m) => m[1]);
+    const validations = [...xml.matchAll(/<dataValidation\b([^>]*)>([\s\S]*?)<\/dataValidation>/gi)]
+      .map((m) => ({ ranges: (attr(m[1], "sqref") ?? "").split(/\s+/), formula: textNodes(m[2], "formula1")[0] ?? "" }));
+    const cellMap = new Map<string, { xml: string; value: string; style: number; type: string }>();
+    for (const m of xml.matchAll(/<c\b([^>]*?)>([\s\S]*?)<\/c>|<c\b([^>]*?)\/>/g)) {
+      const head = m[1] ?? m[3] ?? ""; const body = m[2] ?? "";
+      const ref = attr(head, "r"); if (!ref) continue;
+      const type = attr(head, "t") ?? ""; const style = Number(attr(head, "s") ?? -1);
+      const raw = textNodes(body, "v")[0] ?? textNodes(body, "t").join("");
+      const value = type === "s" ? (sharedStrings[Number(raw)] ?? "") : unescapeXml(raw);
+      cellMap.set(ref, { xml: m[0], value, style, type });
+    }
+    const isMerged = (ref: string) => merged.some((range) => {
+      const [a, b = a] = range.split(":"); const ar = Number(a.replace(/\D/g, "")); const br = Number(b.replace(/\D/g, ""));
+      const rowNumber = Number(ref.replace(/\D/g, ""));
+      return rowNumber >= ar && rowNumber <= br && colNumber(a) <= colNumber(ref) && colNumber(b) >= colNumber(ref);
+    });
+    for (const [ref, cell] of cellMap) {
+      const validation = validations.find((v) => v.ranges.some((range) => {
+        const [start, end = start] = range.split(":");
+        const startRow = Number(start.replace(/\D/g, "")); const endRow = Number(end.replace(/\D/g, ""));
+        return Number(ref.replace(/\D/g, "")) >= startRow && Number(ref.replace(/\D/g, "")) <= endRow
+          && colNumber(start) <= colNumber(ref) && colNumber(end) >= colNumber(ref);
+      }));
+      const row = Number(ref.replace(/\D/g, "")); const col = colNumber(ref);
+      const adjacent = [cellMap.get(cellRef(row, col - 1))?.value, cellMap.get(cellRef(row, col + 1))?.value,
+        cellMap.get(cellRef(row - 1, col))?.value, cellMap.get(cellRef(row + 1, col))?.value].filter(Boolean) as string[];
+      const label = adjacent.find((v) => v.trim().length > 2) ?? "";
+      const hasFormula = /<f\b/i.test(cell.xml);
+      const candidate = !hasFormula && (unlocked.has(cell.style) || Boolean(validation) ||
+        (cell.value.length === 0 && cell.style >= 0 && Boolean(label)));
+      if (!candidate || isMerged(ref)) continue;
+      const listedOptions = validation ? validationOptions(validation.formula) : [];
+      const combined = `${label} ${cell.value}`.toUpperCase();
+      const responseType: ResponseType = /OK\/?NOK|SC\b|N\/A|ESTADO|STATUS/.test(combined) ? "status"
+        : /FECHA|DATE/.test(combined) ? "date" : /MEDI|VOLTAJE|AMPER|TEMP|PRESI|DISTANC|%/.test(combined) ? "measurement"
+        : /OBSERV|COMENT|DESCRIP/.test(combined) ? "observation" : /NÚM|NUM|CANT|VALOR/.test(combined) ? "number"
+        : listedOptions.length ? "selection" : "text";
+      const options = responseType === "status" ? ["OK", "NOK", "SC", "NA"] : listedOptions;
+      const evidenceSlot: TemplateField["evidenceSlot"] = /FOTO|FOTOGRAF|IMAGEN|EVIDENCIA/.test(combined)
+        ? "photo" : responseType === "observation" ? "observation" : "none";
+      const id = `${sheet.name}:${ref}`;
+      const confidence = label ? 0.82 : 0.28;
+      if (!label || evidenceSlot === "photo") {
+        unmapped.push({ target: `${sheet.name}!${ref}`, sheet: sheet.name, reason: !label ? "Celda editable sin etiqueta adyacente" : "Slot de evidencia requiere mapeo explícito", confidence, state: "unresolved", ignoreReason: null });
+        audit.push({ type: "unmapped-candidate", target: `${sheet.name}!${ref}`, evidence: "editable style or validation" });
+      } else {
+        catalog.push({ id, sheet: sheet.name, subsection: "", key: label, label, responseType, options, required: false,
+          applicability: validation ? "validated" : "general", evidenceSlot, target: `${sheet.name}!${ref}`,
+          sourceEvidence: `Etiqueta adyacente: ${label}${validation ? `; validación: ${validation.formula}` : ""}`, confidence,
+          state: "mapped", ignoreReason: null });
+      }
+    }
+    if (sheet.name === "REPORTE FOTOGRAFICO" && !catalog.some((field) => field.sheet === sheet.name && field.evidenceSlot === "photo") &&
+      !unmapped.some((candidate) => candidate.sheet === sheet.name && /evidencia|slot/i.test(candidate.reason))) {
+      const target = `${sheet.name}!__evidence__`;
+      unmapped.push({ target, sheet: sheet.name, reason: "No se detectaron slots de evidencia fotográfica; requiere mapeo explícito", confidence: 0, state: "unresolved", ignoreReason: null });
+      audit.push({ type: "evidence-slot-blocker", sheet: sheet.name, target });
+    }
+    if (sheet.name !== "base" && !catalog.some((field) => field.sheet === sheet.name) &&
+      !unmapped.some((candidate) => candidate.sheet === sheet.name)) {
+      const target = `${sheet.name}!__sheet__`;
+      unmapped.push({ target, sheet: sheet.name, reason: "No se detectaron campos editables; requiere revisión manual", confidence: 0, state: "unresolved", ignoreReason: null });
+      audit.push({ type: "sheet-blocker", sheet: sheet.name, target });
+    }
+  });
+  const technicalSheets = EXPECTED_SHEETS.filter(([name]) => name !== "base").map(([name]) => name);
+  const fieldsBySheet = new Set(catalog.map((field) => field.sheet));
+  const completeCatalog = catalog.length > 0 && technicalSheets.every((sheet) => fieldsBySheet.has(sheet));
+  audit.push({ type: "catalog-summary", totalCandidates: catalog.length + unmapped.length, mapped: catalog.length, unresolved: unmapped.length });
+  return { catalog, unmapped, audit, ready: unmapped.length === 0 && completeCatalog };
+}
+
+function replaceCellValue(xml: string, ref: string, value: unknown): string {
+  const escaped = escapeXml(String(value ?? ""));
+  const pattern = new RegExp(`(<c\\b[^>]*\\br="${ref}"[^>]*>)([\\s\\S]*?)(</c>)`, "i");
+  const replaced = xml.replace(pattern, (_, open: string, body: string, close: string) => {
+    const cleaned = body.replace(/<v>[\s\S]*?<\/v>/i, "").replace(/<is>[\s\S]*?<\/is>/i, "");
+    const isString = typeof value !== "number" && typeof value !== "bigint";
+    const normalizedOpen = isString
+      ? (/\bt="/i.test(open) ? open.replace(/\bt="[^"]*"/i, 't="inlineStr"') : open.replace(/>$/, ' t="inlineStr">'))
+      : open.replace(/\s+t="[^"]*"/i, "");
+    const valueXml = isString ? `<is><t>${escaped}</t></is>` : `<v>${escaped}</v>`;
+    return `${normalizedOpen}${cleaned}${valueXml}${close}`;
+  });
+  if (replaced !== xml) return replaced;
+  const selfClosing = new RegExp(`<c\\b([^>]*\\br="${ref}"[^>]*)\\s*/>`, "i");
+  return xml.replace(selfClosing, (_, attributes: string) => {
+    const isString = typeof value !== "number" && typeof value !== "bigint";
+    const normalizedAttributes = isString
+      ? (/\bt="/i.test(attributes) ? attributes.replace(/\bt="[^"]*"/i, 't="inlineStr"') : `${attributes} t="inlineStr"`)
+      : attributes.replace(/\s+t="[^"]*"/i, "");
+    const valueXml = isString ? `<is><t>${escaped}</t></is>` : `<v>${escaped}</v>`;
+    return `<c${normalizedAttributes}>${valueXml}</c>`;
+  });
+}
+function topLeftRef(ref: string): string {
+  return ref.split(":")[0].trim();
+}
+function findValue(snapshot: unknown, field: TemplateField): unknown {
+  if (!snapshot || typeof snapshot !== "object") return undefined;
+  const record = snapshot as Record<string, unknown>;
+  const responses = record.responses;
+  if (responses && typeof responses === "object" && Object.prototype.hasOwnProperty.call(responses, field.id)) {
+    return (responses as Record<string, unknown>)[field.id];
+  }
+  // HOJA DE SEG is supported only through an explicit normalized mapping,
+  // never by guessing from labels. Example applicability:
+  // finding.description, finding.priority, or finding.description:F123.
+  if (field.sheet === "HOJA DE SEG" && field.applicability.startsWith("finding.")) {
+    const [, propertyAndId] = field.applicability.split("finding.");
+    const [property, findingId] = propertyAndId.split(":");
+    const findings = [
+      ...(Array.isArray(record.findings) ? record.findings : []),
+      ...(Array.isArray(record.sections) ? record.sections.flatMap((section) =>
+        section && typeof section === "object" && Array.isArray((section as Record<string, unknown>).points)
+          ? ((section as Record<string, unknown>).points as unknown[]).flatMap((point) =>
+            point && typeof point === "object" && Array.isArray((point as Record<string, unknown>).findings)
+              ? (point as Record<string, unknown>).findings as unknown[] : [])
+          : []) : []),
+    ];
+    const finding = findings.find((item) =>
+      item && typeof item === "object" && (!findingId || (item as Record<string, unknown>).id === findingId),
+    ) as Record<string, unknown> | undefined;
+    return finding?.[property];
+  }
+  return undefined;
+}
+
+export function patchTemplate(bytes: Buffer, snapshot: unknown, catalog: TemplateField[]): {
+  bytes: Buffer; writtenTargets: string[]; capturedValues: Record<string, string>;
+} {
+  const parsed = zipEntries(bytes);
+  const writtenTargets: string[] = [];
+  const capturedValues: Record<string, string> = {};
+  for (const field of catalog.filter((f) => f.state === "mapped" && f.evidenceSlot !== "photo" && !f.target.endsWith("!__evidence__"))) {
+    const value = findValue(snapshot, field);
+    if (value === undefined || value === null || value === "") continue;
+    const writeValue = (field.responseType === "number" || field.responseType === "measurement") &&
+      typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))
+      ? Number(value) : value;
+    capturedValues[field.target] = String(writeValue ?? "");
+    const [sheet, rawRef] = field.target.split("!");
+    const ref = topLeftRef(rawRef);
+    const sheetPath = workbookSheets(parsed.entries).find((s) => s.name === sheet)?.path;
+    const entry = parsed.entries.find((e) => e.name === sheetPath);
+    if (!entry) throw new Error(`No se encontró ${field.target}`);
+    const patched = replaceCellValue(xmlData(entry), ref, writeValue);
+    if (patched === xmlData(entry)) throw new Error(`No se pudo escribir ${field.target}`);
+    entry.data = Buffer.from(patched);
+    const compressed = entry.method === 8 ? deflateRawSync(entry.data) : entry.data;
+    const localNameLen = entry.local.readUInt16LE(26); const extraLen = entry.local.readUInt16LE(28);
+    const localHead = Buffer.from(entry.local.subarray(0, 30 + localNameLen + extraLen));
+    const checksum = crc32(entry.data);
+    localHead.writeUInt32LE(checksum, 14); localHead.writeUInt32LE(compressed.length, 18); localHead.writeUInt32LE(entry.data.length, 22);
+    entry.local = Buffer.concat([localHead, compressed]);
+    entry.compressed = Buffer.from(compressed);
+    entry.central.writeUInt32LE(checksum, 16); entry.central.writeUInt32LE(compressed.length, 20); entry.central.writeUInt32LE(entry.data.length, 24);
+    writtenTargets.push(field.target);
+  }
+  return { bytes: zipXml(parsed.entries, parsed.comment), writtenTargets, capturedValues };
+}
+
+// Small table-free CRC32 implementation for ZIP headers.
+function crc32(data: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of data) {
+    crc ^= byte;
+    for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function readTargetValue(bytes: Buffer, target: string): string | undefined {
+  const parsed = zipEntries(bytes);
+  const [sheet, rawRef] = target.split("!");
+  const ref = topLeftRef(rawRef);
+  const path = workbookSheets(parsed.entries).find((item) => item.name === sheet)?.path;
+  const entry = parsed.entries.find((item) => item.name === path);
+  if (!entry) return undefined;
+  const match = new RegExp(`<c\\b([^>]*\\br="${ref}"[^>]*)>([\\s\\S]*?)</c>|<c\\b([^>]*\\br="${ref}"[^>]*)/>`, "i").exec(xmlData(entry));
+  if (!match) return undefined;
+  const head = match[1] ?? match[3] ?? "";
+  const body = match[2] ?? "";
+  const type = attr(head, "t");
+  const raw = textNodes(body, type === "inlineStr" ? "t" : "v")[0] ?? "";
+  if (type === "s") {
+    const shared = parsed.entries.find((item) => item.name === "xl/sharedStrings.xml");
+    return shared ? textNodes(xmlData(shared), "si")[Number(raw)] : undefined;
+  }
+  return unescapeXml(raw);
+}
+
+export function verifyTemplate(
+  bytes: Buffer,
+  catalog: TemplateField[],
+  writtenTargets: string[],
+  capturedValues: Record<string, string> = {},
+  evidencePages = 1,
+): TemplateVerification {
+  try {
+    const entries = zipEntries(bytes).entries;
+    const sheets = validateWorkbookStructure(entries, evidencePages);
+    const details: string[] = ["Diez hojas y dimensiones verificadas"];
+    const mismatches: string[] = [];
+    for (const target of Object.keys(capturedValues)) {
+      if (!writtenTargets.includes(target)) mismatches.push(`${target} (capturado pero no escrito)`);
+    }
+    for (const target of writtenTargets) {
+      const actual = readTargetValue(bytes, target);
+      if (actual === undefined || actual !== capturedValues[target]) mismatches.push(`${target} (esperado ${capturedValues[target] ?? "capturado"}, obtenido ${actual ?? "ausente"})`);
+    }
+    if (mismatches.length) details.push(`Targets capturados no coinciden: ${mismatches.join(", ")}`);
+    // Optional catalog fields may legitimately have no response in a visit.
+    // Verification is limited to values actually captured and written.
+    void catalog;
+    return { valid: mismatches.length === 0, sheets, writtenTargets, details };
+  } catch (error) {
+    return { valid: false, sheets: [], writtenTargets, details: [error instanceof Error ? error.message : String(error)] };
+  }
+}
+
+export async function convertXlsxToPdf(xlsx: Buffer): Promise<Buffer> {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "template-"));
+  const input = path.join(dir, "filled.xlsx");
+  await fs.writeFile(input, xlsx);
+  try {
+    await execFileAsync("soffice", ["--headless", "--convert-to", "pdf", "--outdir", dir, input], { timeout: 120_000 });
+    return await fs.readFile(path.join(dir, "filled.pdf"));
+  } catch {
+    throw new Error("La conversión PDF requiere LibreOffice/soffice instalado y disponible");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}

@@ -1,10 +1,12 @@
-import { createInitialSections } from '../data/checklist';
 import {
   AuditEvent,
   ChecklistStatus,
   Finding,
   Visit,
   VisitSnapshotSyncStatus,
+  TemplateField,
+  Section,
+  ChecklistPoint,
 } from '../types';
 
 export interface DraftInput {
@@ -12,6 +14,12 @@ export interface DraftInput {
   siteName?: string;
   workOrder?: string;
   technician?: string;
+  template?: {
+    id: string;
+    version: string;
+    hash: string;
+  };
+  templateFields?: TemplateField[];
 }
 
 export interface DraftDependencies {
@@ -30,6 +38,7 @@ export function createDraftVisit(
   const now = dependencies.now ?? (() => new Date().toISOString());
   const id = dependencies.id ?? (() => crypto.randomUUID());
   const timestamp = now();
+  const templateFields = data.templateFields ?? [];
 
   return {
     id: id(),
@@ -44,11 +53,140 @@ export function createDraftVisit(
     closedAt: null,
     reopenedAt: null,
     serverVersion: 0,
-    sections: createInitialSections(),
+    template: data.template,
+    templateFields,
+    responses: Object.fromEntries(templateFields.map(field => [field.id, ''])),
+    sections: createImportedSections(templateFields),
     findings: [],
     auditEvents: [],
     operationId: id(),
     syncAttemptCount: 0,
+  };
+}
+
+/**
+ * Legacy Section/ChecklistPoint consumers only receive imported status fields.
+ * Every other imported field is rendered from templateFields/responses.
+ */
+export function createImportedSections(fields: TemplateField[]): Section[] {
+  const grouped = new Map<string, TemplateField[]>();
+  for (const field of fields) {
+    if (field.type !== 'status' || field.isTitle || field.editable === false) continue;
+    const key = `${field.sheet}\u0000${field.section || field.sheet}\u0000${field.subsection || ''}`;
+    const existing = grouped.get(key) ?? [];
+    existing.push(field);
+    grouped.set(key, existing);
+  }
+  return [...grouped.entries()].map(([key, statusFields]) => {
+    const [sheet, section, subsection] = key.split('\u0000');
+    const title = subsection ? `${section} · ${subsection}` : section;
+    const points: ChecklistPoint[] = statusFields.map(field => ({
+      id: field.id,
+      title: field.label,
+      status: 'PENDING',
+    }));
+    return {
+      id: `${sheet}:${section}:${subsection}`,
+      name: sheet,
+      title,
+      status: 'PENDING',
+      points,
+    };
+  });
+}
+
+/** Stable, JSON-safe source-of-truth portion of a visit sync payload. */
+export function buildTemplateSyncSnapshot(
+  visit: Pick<Visit, 'template' | 'templateFields' | 'responses'>,
+): {
+  template: { version: number; sha256: string };
+  templateFields: Array<{
+    id: string;
+    sheet: string;
+    subsection: string;
+    key: string;
+    label: string;
+    responseType: TemplateField['type'];
+    options: string[];
+    required: boolean;
+    applicability: string;
+    evidenceSlot: 'none' | 'photo' | 'observation';
+    target: string;
+    sourceEvidence: string;
+    confidence: number;
+    state: 'mapped' | 'ignored' | 'unresolved';
+  }>;
+  responses: Record<string, string | number | boolean | null>;
+} {
+  if (!visit.template) throw new Error('Falta cargar la plantilla Excel original.');
+  return {
+    template: { version: Number(visit.template.version), sha256: visit.template.hash },
+    templateFields: (visit.templateFields ?? []).map(field => {
+      const ref = field.target?.cell || field.target?.range || '';
+      return {
+        id: field.id,
+        sheet: field.sheet,
+        subsection: field.subsection || field.section,
+        key: ref || field.id,
+        label: field.label,
+        responseType: field.type,
+        options: field.options || [],
+        required: Boolean(field.required),
+        applicability: field.applicability || '',
+        evidenceSlot: field.evidenceSlot || (field.type === 'observation' ? 'observation' : 'photo'),
+        target: `${field.sheet}!${ref}`,
+        sourceEvidence: field.fullText || field.label,
+        confidence: 1,
+        state: field.mapped === false ? 'unresolved' : 'mapped',
+      };
+    }),
+    responses: Object.fromEntries(
+      Object.entries(visit.responses ?? {}).filter(([, value]) =>
+        value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean',
+      ),
+    ) as Record<string, string | number | boolean | null>,
+  };
+}
+
+const WIRE_POINT_STATUSES: ChecklistStatus[] = ['PENDING', 'OK', 'NOK', 'SC', 'NA'];
+
+/**
+ * A wire point owns exactly one imported status field. Non-status responses
+ * remain in the snapshot-level response map and must never be copied here.
+ */
+export function buildStatusPointWire(
+  point: Pick<ChecklistPoint, 'id' | 'status'>,
+  templateFields: TemplateField[],
+  responses: Record<string, unknown>,
+): { fields: Record<string, string>; status: ChecklistStatus } {
+  const field = templateFields.find(candidate => candidate.id === point.id && candidate.type === 'status');
+  if (!field) return { fields: {}, status: point.status };
+  const response = responses[field.id];
+  const status = WIRE_POINT_STATUSES.includes(response as ChecklistStatus)
+    ? response as ChecklistStatus
+    : point.status;
+  return { fields: { [field.id]: status }, status };
+}
+
+/** Convenience metadata is derived from imported PRESENTACION responses only. */
+export function getVisitConvenienceFields(
+  visit: Pick<Visit, 'templateFields' | 'responses'>,
+): Pick<Visit, 'siteId' | 'siteName' | 'workOrder' | 'technician'> {
+  const presentation = (visit.templateFields ?? []).filter(
+    field => field.sheet.toUpperCase() === 'PRESENTACION',
+  );
+  const find = (patterns: RegExp[]): string => {
+    const field = presentation.find(candidate =>
+      patterns.some(pattern => pattern.test(`${candidate.label} ${candidate.fullText ?? ''}`.toLowerCase())),
+    );
+    const value = field ? visit.responses?.[field.id] : undefined;
+    return value == null ? '' : String(value);
+  };
+  return {
+    siteId: find([/mnem[oó]nico/, /\bid\b/]),
+    siteName: find([/nombre.*sitio/, /^sitio$/]),
+    workOrder: find([/\bwo\b/, /orden.*trabajo/, /work.?order/]),
+    technician: find([/ingenier/, /t[eé]cnic/, /responsable/]),
   };
 }
 
@@ -160,10 +298,22 @@ export interface CloseEligibility {
 
 export function getCloseEligibility(visit: Visit): CloseEligibility {
   const missingItems: string[] = [];
-  const generalDataComplete = Boolean(
-    visit.siteId && visit.siteName && visit.workOrder && visit.technician,
+  const templateFields = visit.templateFields ?? [];
+  const responses = visit.responses ?? {};
+  const hasTemplate = Boolean(visit.template?.id && templateFields.length > 0);
+  if (!hasTemplate) missingItems.push('Falta cargar la plantilla Excel original.');
+  const requiredFields = templateFields.filter(
+    field => field.required && !field.isTitle && field.editable !== false,
   );
+  const missingRequired = requiredFields.filter(field => {
+    const value = responses[field.id];
+    return value === undefined || value === null || String(value).trim() === '';
+  });
+  const generalDataComplete = hasTemplate && missingRequired.length === 0;
   if (!generalDataComplete) missingItems.push('Datos generales del sitio incompletos.');
+  for (const field of missingRequired) {
+    missingItems.push(`Campo requerido sin completar: ${field.label}`);
+  }
 
   let allPointsEvaluated = true;
   let allNokHaveFindings = true;
@@ -205,7 +355,13 @@ export function getCloseEligibility(visit: Visit): CloseEligibility {
     }
   }
   return {
-    eligible: generalDataComplete && allPointsEvaluated && allNokHaveFindings,
+    eligible:
+      hasTemplate &&
+      templateFields.every(field => field.isTitle || field.editable === false || !field.required ||
+        (responses[field.id] !== undefined &&
+          responses[field.id] !== null &&
+          String(responses[field.id]).trim() !== '')) &&
+      generalDataComplete && allPointsEvaluated && allNokHaveFindings,
     generalDataComplete,
     allPointsEvaluated,
     allNokHaveFindings,

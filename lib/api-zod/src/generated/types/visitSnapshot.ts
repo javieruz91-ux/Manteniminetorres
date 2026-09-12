@@ -5,19 +5,22 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { TemplateField } from './templateField';
 import type { VisitAuditEvent } from './visitAuditEvent';
 import type { VisitPhoto } from './visitPhoto';
 import type { VisitSection } from './visitSection';
 import type { VisitSnapshotLifecycleStatus } from './visitSnapshotLifecycleStatus';
+import type { VisitSnapshotResponses } from './visitSnapshotResponses';
 import type { VisitSnapshotSyncStatus } from './visitSnapshotSyncStatus';
+import type { VisitTemplatePin } from './visitTemplatePin';
 
 export interface VisitSnapshot {
   /** @minLength 1 */
   visitId: string;
-  siteId: string;
-  siteName: string;
-  workOrder: string;
-  technician: string;
+  siteId?: string;
+  siteName?: string;
+  workOrder?: string;
+  technician?: string;
   visitDate: Date;
   lifecycleStatus: VisitSnapshotLifecycleStatus;
   syncStatus: VisitSnapshotSyncStatus;
@@ -31,4 +34,9 @@ export interface VisitSnapshot {
   sections: VisitSection[];
   auditEvents: VisitAuditEvent[];
   photos: VisitPhoto[];
+  template: VisitTemplatePin;
+  /** Complete immutable catalog revision used by this visit. */
+  templateFields: TemplateField[];
+  /** Responses keyed by imported template field id. */
+  responses: VisitSnapshotResponses;
 }

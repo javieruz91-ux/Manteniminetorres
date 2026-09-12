@@ -8,19 +8,27 @@ import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { useRouter } from 'expo-router';
 import { Badge } from '@/components/Badge';
+import { useTemplate } from '@/context/TemplateContext';
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getVisitConvenienceFields } from '@/utils/maintenanceRules';
 
 export default function DashboardScreen() {
   const { visits, createVisit, isOnline, isDemoMode, resetDemoData } = useVisits();
   const { user, login, logout, isAuthenticated } = useAuth();
+  const { catalog, isLoading: templateLoading } = useTemplate();
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
   const handleStartVisit = async () => {
-    const id = await createVisit({});
-    router.push(`/visit/${id}`);
+    try {
+      const id = await createVisit({});
+      router.push(`/visit/${id}`);
+    } catch (error) {
+      Alert.alert('No se puede iniciar', error instanceof Error ? error.message : 'Error desconocido');
+      router.push('/settings/template');
+    }
   };
 
   const handleResetDemo = async () => {
@@ -95,6 +103,19 @@ export default function DashboardScreen() {
         </Text>
       </View>
 
+      {!templateLoading && !catalog && (
+        <TouchableOpacity
+          testID="missing-template-banner"
+          onPress={() => router.push('/settings/template')}
+          style={[styles.templateBanner, { backgroundColor: colors.destructive }]}
+        >
+          <Feather name="alert-triangle" size={16} color="#FFF" />
+          <Text style={styles.templateBannerText}>
+            Falta cargar la plantilla Excel original · Configurar ahora
+          </Text>
+        </TouchableOpacity>
+      )}
+
       {isDemoMode && (
         <View style={[styles.demoBanner, { backgroundColor: colors.warning }]}>
           <View style={styles.demoCopy}>
@@ -120,12 +141,14 @@ export default function DashboardScreen() {
         keyExtractor={v => v.id}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={renderEmpty}
-        renderItem={({ item }) => (
+        renderItem={({ item }) => {
+          const convenience = getVisitConvenienceFields(item);
+          return (
           <TouchableOpacity onPress={() => router.push(`/visit/${item.id}`)} activeOpacity={0.7}>
             <Card style={styles.visitCard}>
               <View style={styles.cardHeader}>
                 <Text style={[styles.siteName, { color: colors.foreground }]}>
-                  {item.siteName || 'Sitio sin nombre'}
+                  {item.siteName || convenience.siteName || convenience.siteId || 'Sitio sin nombre'}
                 </Text>
                 <View style={{ gap: 4, alignItems: 'flex-end' }}>
                   <Badge
@@ -155,7 +178,7 @@ export default function DashboardScreen() {
                 <View style={styles.infoRow}>
                   <Feather name="hash" size={14} color={colors.mutedForeground} />
                   <Text style={[styles.infoText, { color: colors.mutedForeground }]}>
-                    OT: {item.workOrder || 'N/A'}
+                    OT: {item.workOrder || convenience.workOrder || 'N/A'}
                   </Text>
                 </View>
                 <View style={styles.infoRow}>
@@ -178,10 +201,17 @@ export default function DashboardScreen() {
               </View>
             </Card>
           </TouchableOpacity>
-        )}
+          );
+        }}
       />
 
       <View style={[styles.footer, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: Math.max(insets.bottom, 16) }]}>
+        <Button
+          title="Configuración de plantilla"
+          variant="ghost"
+          icon={<Feather name="settings" size={17} color={colors.primary} />}
+          onPress={() => router.push('/settings/template')}
+        />
         <Button
           testID="btn-start-visit"
           title="Iniciar Visita"
@@ -226,6 +256,21 @@ const styles = StyleSheet.create({
   syncBar: {
     paddingHorizontal: 16,
     paddingVertical: 8,
+  },
+  templateBanner: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  templateBannerText: {
+    color: '#FFF',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    flex: 1,
   },
   syncText: {
     fontFamily: 'Inter_400Regular',

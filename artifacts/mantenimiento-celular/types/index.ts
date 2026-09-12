@@ -4,6 +4,73 @@ export type FindingState = 'ABIERTO' | 'CORREGIDO';
 export type VisitSnapshotLifecycleStatus = 'BORRADOR' | 'ABIERTA' | 'CERRADA' | 'REABIERTA';
 export type VisitSnapshotSyncStatus = 'PENDIENTE' | 'SINCRONIZANDO' | 'SINCRONIZADO' | 'ERROR';
 
+export type TemplateFieldType =
+  | 'text'
+  | 'number'
+  | 'date'
+  | 'selection'
+  | 'measurement'
+  | 'observation'
+  | 'status';
+export type TemplateEvidenceSlot = 'none' | 'photo' | 'observation';
+
+export interface TemplateTarget {
+  cell?: string;
+  range?: string;
+}
+
+export interface TemplateField {
+  id: string;
+  label: string;
+  fullText?: string;
+  sheet: string;
+  section: string;
+  subsection?: string;
+  type: TemplateFieldType;
+  evidenceSlot?: TemplateEvidenceSlot;
+  options?: string[];
+  required?: boolean;
+  applicability?: string;
+  target?: TemplateTarget;
+  editable?: boolean;
+  isTitle?: boolean;
+  mapped?: boolean;
+}
+
+export interface TemplateUnmappedCell {
+  id: string;
+  sheet: string;
+  cell: string;
+  /** Immutable descriptor identity, e.g. REPORTE FOTOGRAFICO!B4. */
+  target?: string;
+  value?: string;
+  fullText?: string;
+}
+
+export interface TemplateDescriptor {
+  id: string;
+  version: string;
+  hash: string;
+  fileName: string;
+  uploadedAt: string;
+  ready: boolean;
+  sheets: number;
+  sections: number;
+  fields: number;
+  unmappedCells: TemplateUnmappedCell[];
+}
+
+export interface TemplateCatalog {
+  descriptor: TemplateDescriptor;
+  fields: TemplateField[];
+}
+
+export interface VisitTemplatePin {
+  id: string;
+  version: string;
+  hash: string;
+}
+
 export type PhotoType = 'ANTES' | 'DESPUES' | 'GENERAL';
 export type UploadStatus = 'pending' | 'uploading' | 'uploaded' | 'failed';
 
@@ -67,6 +134,12 @@ export interface Visit {
   closedAt: string | null;
   reopenedAt: string | null;
   sections: Section[];
+  /** The exact catalog revision used to create this draft. */
+  template?: VisitTemplatePin;
+  /** Offline copy of imported fields; never generated from the old demo checklist. */
+  templateFields: TemplateField[];
+  /** Values keyed by imported field id, including empty values. */
+  responses: Record<string, unknown>;
   findings: Finding[];
   auditEvents: AuditEvent[];
   // Sync metadata

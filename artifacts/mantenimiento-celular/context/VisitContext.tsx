@@ -9,6 +9,8 @@ import { syncVisit, requestUploadUrl, listVisits } from '@workspace/api-client-r
 import { VisitSyncInput, VisitPhoto, VisitPhotoUploadStatus, UploadUrlRequestContentType, VisitSnapshot, VisitFindingState, VisitFindingPriority, VisitSectionStatus, VisitPointStatus } from '@workspace/api-client-react';
 import { Platform } from 'react-native';
 import { useAuth } from '@/lib/auth';
+import { useTemplate } from '@/context/TemplateContext';
+import { TemplateField } from '../types';
 import * as SecureStore from 'expo-secure-store';
 import {
   closeVisit as closeVisitRules,
@@ -18,6 +20,9 @@ import {
   retryDelayMs,
   saveFindingAndStatus as saveFindingAndStatusRules,
   setPointStatus,
+  buildTemplateSyncSnapshot,
+  getVisitConvenienceFields,
+  buildStatusPointWire,
 } from '../utils/maintenanceRules';
 
 interface VisitContextValue {
@@ -31,6 +36,7 @@ interface VisitContextValue {
   deleteVisit: (id: string) => Promise<void>;
   updatePointStatus: (visitId: string, sectionId: string, pointId: string, status: ChecklistStatus) => Promise<void>;
   saveFindingAndStatus: (visitId: string, pointId: string, sectionId: string, status: ChecklistStatus, finding: Finding | null) => Promise<void>;
+  updateResponse: (visitId: string, fieldId: string, value: unknown) => Promise<void>;
   getVisit: (id: string) => Visit | undefined;
   savePhoto: (tempUri: string, visitId: string, photoId?: string) => Promise<string>;
   triggerSync: () => void;
@@ -53,6 +59,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(true);
   const { user, isAuthenticated } = useAuth();
+  const { catalog } = useTemplate();
   const isDemoMode = __DEV__ && !isAuthenticated && process.env.EXPO_PUBLIC_DEMO_MODE !== 'false';
   
   const isHydrated = useRef(false);
@@ -255,7 +262,16 @@ export function VisitProvider({ children }: { children: ReactNode }) {
               sv.serverVersion > (localVisit.serverVersion || 0) &&
               (!localIsDirty || !localIsNewer)
             ) {
-              merged[idx] = mapSnapshotToLocal(sv, remoteUris);
+              merged[idx] = mapSnapshotToLocal(
+                sv,
+                remoteUris,
+                catalog &&
+                  (sv as any).template &&
+                  Number((sv as any).template.version) === Number(catalog.descriptor.version) &&
+                  String((sv as any).template.sha256) === catalog.descriptor.hash
+                  ? catalog.fields
+                  : [],
+              );
             } else {
               // Never replace a newer local revision with a server snapshot. We can
               // still advance the known server version and merge downloaded files.
@@ -275,7 +291,16 @@ export function VisitProvider({ children }: { children: ReactNode }) {
               };
             }
           } else {
-            merged.push(mapSnapshotToLocal(sv, remoteUris));
+            merged.push(mapSnapshotToLocal(
+              sv,
+              remoteUris,
+              catalog &&
+                (sv as any).template &&
+                Number((sv as any).template.version) === Number(catalog.descriptor.version) &&
+                String((sv as any).template.sha256) === catalog.descriptor.hash
+                ? catalog.fields
+                : [],
+            ));
           }
         });
         return merged;
@@ -283,7 +308,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       console.warn("Failed to fetch server visits", e);
     }
-  }, [isAuthenticated, updateAndPersist]);
+  }, [catalog?.fields, isAuthenticated, updateAndPersist]);
 
   // Load namespace
   useEffect(() => {
@@ -297,6 +322,14 @@ export function VisitProvider({ children }: { children: ReactNode }) {
         const stored = await AsyncStorage.getItem(currentNamespace);
         if (stored) {
           parsed = JSON.parse(stored);
+            // Older local drafts predate imported catalogs. Preserve them as
+            // explicitly catalog-less drafts rather than reviving the demo
+            // checklist.
+            parsed = parsed.map(v => ({
+              ...v,
+              templateFields: Array.isArray(v.templateFields) ? v.templateFields : [],
+              responses: v.responses && typeof v.responses === 'object' ? v.responses : {},
+            }));
           // Crash recovery: revert SINCRONIZANDO -> PENDIENTE, preserving exact operationId
           parsed = parsed.map(v => {
             if (v.syncStatus === 'SINCRONIZANDO') {
@@ -399,7 +432,29 @@ export function VisitProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const createVisit = async (data: Partial<Visit>): Promise<string> => {
-    const newVisit = createDraftVisit(data, {
+    if (!catalog && !isDemoMode) {
+      throw new Error('Falta cargar la plantilla Excel original.');
+    }
+    if (
+      catalog &&
+      (!catalog.descriptor.ready || catalog.descriptor.unmappedCells.length > 0) &&
+      !isDemoMode
+    ) {
+      throw new Error(
+        'La plantilla tiene celdas editables sin mapear. Resuelve la auditoría antes de iniciar una visita.',
+      );
+    }
+    const newVisit = createDraftVisit({
+      ...data,
+      template: catalog?.descriptor
+        ? {
+            id: catalog.descriptor.id,
+            version: catalog.descriptor.version,
+            hash: catalog.descriptor.hash,
+          }
+        : undefined,
+      templateFields: catalog?.fields ?? [],
+    }, {
       id: () => Crypto.randomUUID(),
       now: () => new Date().toISOString(),
     });
@@ -453,6 +508,35 @@ export function VisitProvider({ children }: { children: ReactNode }) {
         }
         return v;
       });
+    });
+  };
+
+  const updateResponse = async (
+    visitId: string,
+    fieldId: string,
+    value: unknown,
+  ): Promise<void> => {
+    await updateAndPersist(prev => {
+      const existing = prev.find(v => v.id === visitId);
+      if (!existing) throw new Error('Visita no encontrada');
+      if (existing.lifecycleStatus === 'CERRADA') {
+        throw new Error('No se puede editar una visita cerrada');
+      }
+      return prev.map(v =>
+        v.id === visitId
+          ? (() => {
+              const responses = { ...v.responses, [fieldId]: value };
+              return {
+                ...v,
+                ...getVisitConvenienceFields({ templateFields: v.templateFields, responses }),
+                responses,
+                clientUpdatedAt: new Date().toISOString(),
+                operationId: Crypto.randomUUID(),
+                syncStatus: 'PENDIENTE' as const,
+              };
+            })()
+          : v,
+      );
     });
   };
 
@@ -721,6 +805,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
         }
 
         const currentV = latestV;
+        const convenience = getVisitConvenienceFields(currentV);
         const photos: VisitPhoto[] = currentV.findings.flatMap(f =>
           f.photos.map(p => ({
             visitId: currentV.id,
@@ -735,13 +820,13 @@ export function VisitProvider({ children }: { children: ReactNode }) {
           })),
         );
 
-        const input: VisitSyncInput = {
+        const input: VisitSyncInput & Record<string, unknown> = {
           visitId: currentV.id,
           operationId: syncOperationId,
-          siteId: currentV.siteId,
-          siteName: currentV.siteName,
-          workOrder: currentV.workOrder,
-          technician: currentV.technician,
+          siteId: currentV.siteId || convenience.siteId,
+          siteName: currentV.siteName || convenience.siteName,
+          workOrder: currentV.workOrder || convenience.workOrder,
+          technician: currentV.technician || convenience.technician,
           visitDate: currentV.visitDate,
           lifecycleStatus: currentV.lifecycleStatus,
           syncStatus: 'SINCRONIZADO',
@@ -754,10 +839,17 @@ export function VisitProvider({ children }: { children: ReactNode }) {
             title: s.title,
             name: s.name,
             status: s.status as VisitSectionStatus,
-            points: s.points.map(pt => ({
+            points: s.points.map(pt => {
+              const wirePoint = buildStatusPointWire(
+                pt,
+                currentV.templateFields,
+                currentV.responses ?? {},
+              );
+              return {
               id: pt.id,
               title: pt.title,
-              status: pt.status as VisitPointStatus,
+              fields: wirePoint.fields,
+              status: wirePoint.status as VisitPointStatus,
               findings: currentV.findings
                 .filter(f => f.pointId === pt.id)
                 .map(f => ({
@@ -772,7 +864,8 @@ export function VisitProvider({ children }: { children: ReactNode }) {
                   commitmentDate: f.commitmentDate,
                   completedDate: f.completedDate,
                 })),
-            })),
+              };
+            }),
           })),
           auditEvents: currentV.auditEvents.map(a => ({
             id: a.id,
@@ -782,6 +875,8 @@ export function VisitProvider({ children }: { children: ReactNode }) {
             metadata: a.metadata,
           })),
           photos,
+          ...buildTemplateSyncSnapshot(currentV),
+          responses: currentV.responses as Record<string, string | number | boolean | null>,
         };
 
         try {
@@ -885,6 +980,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       deleteVisit,
       updatePointStatus,
       saveFindingAndStatus,
+      updateResponse,
       getVisit,
       savePhoto,
       triggerSync,
@@ -902,7 +998,24 @@ export function useVisits() {
   return context;
 }
 
-function mapSnapshotToLocal(sv: VisitSnapshot, remoteUris: Record<string, string> = {}): Visit {
+function mapSnapshotToLocal(
+  sv: VisitSnapshot,
+  remoteUris: Record<string, string> = {},
+  fallbackTemplateFields: TemplateField[] = [],
+): Visit {
+  const remoteTemplate = (sv as any).template as
+    | { version?: number; sha256?: string; id?: string; hash?: string }
+    | null
+    | undefined;
+  const rawTemplateFields = (sv as any).templateFields as any[] | undefined;
+  const remoteTemplateFields: TemplateField[] = rawTemplateFields?.length
+    ? rawTemplateFields.map(normalizeWireTemplateField)
+    : fallbackTemplateFields;
+  const restoredResponses = ((sv as any).responses ||
+    sv.sections.reduce((all, section) => ({
+      ...all,
+      ...section.points.reduce((fields, point) => ({ ...fields, ...(point as any).fields }), {}),
+    }), {})) as Record<string, unknown>;
   const findings: Finding[] = [];
   sv.sections.forEach(s => {
     s.points.forEach(p => {
@@ -938,10 +1051,10 @@ function mapSnapshotToLocal(sv: VisitSnapshot, remoteUris: Record<string, string
 
   return {
     id: sv.visitId,
-    siteId: sv.siteId,
-    siteName: sv.siteName,
-    workOrder: sv.workOrder,
-    technician: sv.technician,
+    siteId: sv.siteId || '',
+    siteName: sv.siteName || '',
+    workOrder: sv.workOrder || '',
+    technician: sv.technician || '',
     visitDate: sv.visitDate,
     clientUpdatedAt: sv.clientUpdatedAt,
     lifecycleStatus: sv.lifecycleStatus as VisitSnapshotLifecycleStatus,
@@ -960,6 +1073,15 @@ function mapSnapshotToLocal(sv: VisitSnapshot, remoteUris: Record<string, string
         status: p.status as ChecklistStatus,
       }))
     })),
+    template: remoteTemplate
+      ? {
+          id: remoteTemplate.id || remoteTemplate.sha256 || remoteTemplate.hash || '',
+          version: String(remoteTemplate.version ?? ''),
+          hash: remoteTemplate.hash || remoteTemplate.sha256 || '',
+        }
+      : undefined,
+    templateFields: remoteTemplateFields,
+    responses: restoredResponses,
     findings,
     auditEvents: sv.auditEvents.map(a => ({
       id: a.id,
@@ -975,4 +1097,28 @@ function mapSnapshotToLocal(sv: VisitSnapshot, remoteUris: Record<string, string
 
 function normalizeDateOnly(value: string): string {
   return value.includes('T') ? value.slice(0, 10) : value;
+}
+
+function normalizeWireTemplateField(field: any): TemplateField {
+  const target = String(field.target ?? '');
+  const separator = target.indexOf('!');
+  const sheet = String(field.sheet ?? (separator >= 0 ? target.slice(0, separator) : ''));
+  const ref = separator >= 0 ? target.slice(separator + 1) : target;
+  return {
+    id: String(field.id ?? field.key ?? `${sheet}:${ref}`),
+    label: String(field.label ?? ''),
+    fullText: field.sourceEvidence ?? field.label,
+    sheet,
+    section: String(field.section ?? field.subsection ?? ''),
+    subsection: field.subsection,
+    type: (field.type ?? field.responseType ?? 'text') as TemplateField['type'],
+    options: Array.isArray(field.options) ? field.options.map(String) : [],
+    required: Boolean(field.required),
+    applicability: field.applicability,
+    evidenceSlot: field.evidenceSlot,
+    target: ref.includes(':') ? { range: ref } : { cell: ref },
+    editable: field.state !== 'ignored',
+    mapped: field.state !== 'unresolved',
+    isTitle: false,
+  };
 }

@@ -133,16 +133,23 @@ export const syncVisitBodyOneServerVersionMin = 0;
 
 
 
+
+export const syncVisitBodyOneTemplateSha256Min = 64;
+export const syncVisitBodyOneTemplateSha256Max = 64;
+
+export const syncVisitBodyOneTemplateFieldsItemConfidenceMin = 0;
+export const syncVisitBodyOneTemplateFieldsItemConfidenceMax = 1;
+
 export const syncVisitBodyTwoOperationIdMax = 200;
 
 
 
 export const SyncVisitBody = zod.object({
   "visitId": zod.string().min(1),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "workOrder": zod.string(),
-  "technician": zod.string(),
+  "siteId": zod.string().optional(),
+  "siteName": zod.string().optional(),
+  "workOrder": zod.string().optional(),
+  "technician": zod.string().optional(),
   "visitDate": zod.coerce.date(),
   "lifecycleStatus": zod.enum(['BORRADOR', 'ABIERTA', 'CERRADA', 'REABIERTA']),
   "syncStatus": zod.enum(['PENDIENTE', 'SINCRONIZANDO', 'SINCRONIZADO', 'ERROR']),
@@ -158,6 +165,7 @@ export const SyncVisitBody = zod.object({
   "points": zod.array(zod.object({
   "id": zod.string().min(1),
   "title": zod.string(),
+  "fields": zod.record(zod.string(), zod.union([zod.string(),zod.number(),zod.boolean()]).nullable()).optional().describe('Template-driven responses keyed by catalog field id.'),
   "status": zod.enum(['PENDING', 'OK', 'NOK', 'SC', 'NA']),
   "findings": zod.array(zod.object({
   "id": zod.string().min(1),
@@ -192,7 +200,29 @@ export const SyncVisitBody = zod.object({
   "uploadStatus": zod.enum(['pending', 'uploading', 'uploaded', 'failed']),
   "contentType": zod.string().nullish(),
   "size": zod.number().int().min(1).nullish()
-}))
+})),
+  "template": zod.object({
+  "version": zod.number().int().min(1),
+  "sha256": zod.string().min(syncVisitBodyOneTemplateSha256Min).max(syncVisitBodyOneTemplateSha256Max)
+}),
+  "templateFields": zod.array(zod.object({
+  "id": zod.string(),
+  "sheet": zod.string(),
+  "subsection": zod.string(),
+  "key": zod.string(),
+  "label": zod.string(),
+  "responseType": zod.enum(['text', 'number', 'date', 'selection', 'measurement', 'observation', 'status']),
+  "options": zod.array(zod.string()),
+  "required": zod.boolean(),
+  "applicability": zod.string(),
+  "evidenceSlot": zod.enum(['photo', 'observation', 'none']),
+  "target": zod.string(),
+  "sourceEvidence": zod.string(),
+  "confidence": zod.number().min(syncVisitBodyOneTemplateFieldsItemConfidenceMin).max(syncVisitBodyOneTemplateFieldsItemConfidenceMax),
+  "state": zod.enum(['mapped', 'ignored', 'unresolved']),
+  "ignoreReason": zod.string().nullish()
+})).describe('Complete immutable catalog revision used by this visit.'),
+  "responses": zod.record(zod.string(), zod.union([zod.string(),zod.number(),zod.boolean()]).nullable()).describe('Responses keyed by imported template field id.')
 }).and(zod.object({
   "operationId": zod.string().min(1).max(syncVisitBodyTwoOperationIdMax)
 }))
@@ -226,13 +256,20 @@ export const listVisitsResponseServerVersionMin = 0;
 
 
 
+export const listVisitsResponseTemplateSha256Min = 64;
+export const listVisitsResponseTemplateSha256Max = 64;
+
+export const listVisitsResponseTemplateFieldsItemConfidenceMin = 0;
+export const listVisitsResponseTemplateFieldsItemConfidenceMax = 1;
+
+
 
 export const ListVisitsResponseItem = zod.object({
   "visitId": zod.string().min(1),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "workOrder": zod.string(),
-  "technician": zod.string(),
+  "siteId": zod.string().optional(),
+  "siteName": zod.string().optional(),
+  "workOrder": zod.string().optional(),
+  "technician": zod.string().optional(),
   "visitDate": zod.coerce.date(),
   "lifecycleStatus": zod.enum(['BORRADOR', 'ABIERTA', 'CERRADA', 'REABIERTA']),
   "syncStatus": zod.enum(['PENDIENTE', 'SINCRONIZANDO', 'SINCRONIZADO', 'ERROR']),
@@ -248,6 +285,7 @@ export const ListVisitsResponseItem = zod.object({
   "points": zod.array(zod.object({
   "id": zod.string().min(1),
   "title": zod.string(),
+  "fields": zod.record(zod.string(), zod.union([zod.string(),zod.number(),zod.boolean()]).nullable()).optional().describe('Template-driven responses keyed by catalog field id.'),
   "status": zod.enum(['PENDING', 'OK', 'NOK', 'SC', 'NA']),
   "findings": zod.array(zod.object({
   "id": zod.string().min(1),
@@ -282,7 +320,29 @@ export const ListVisitsResponseItem = zod.object({
   "uploadStatus": zod.enum(['pending', 'uploading', 'uploaded', 'failed']),
   "contentType": zod.string().nullish(),
   "size": zod.number().int().min(1).nullish()
-}))
+})),
+  "template": zod.object({
+  "version": zod.number().int().min(1),
+  "sha256": zod.string().min(listVisitsResponseTemplateSha256Min).max(listVisitsResponseTemplateSha256Max)
+}),
+  "templateFields": zod.array(zod.object({
+  "id": zod.string(),
+  "sheet": zod.string(),
+  "subsection": zod.string(),
+  "key": zod.string(),
+  "label": zod.string(),
+  "responseType": zod.enum(['text', 'number', 'date', 'selection', 'measurement', 'observation', 'status']),
+  "options": zod.array(zod.string()),
+  "required": zod.boolean(),
+  "applicability": zod.string(),
+  "evidenceSlot": zod.enum(['photo', 'observation', 'none']),
+  "target": zod.string(),
+  "sourceEvidence": zod.string(),
+  "confidence": zod.number().min(listVisitsResponseTemplateFieldsItemConfidenceMin).max(listVisitsResponseTemplateFieldsItemConfidenceMax),
+  "state": zod.enum(['mapped', 'ignored', 'unresolved']),
+  "ignoreReason": zod.string().nullish()
+})).describe('Complete immutable catalog revision used by this visit.'),
+  "responses": zod.record(zod.string(), zod.union([zod.string(),zod.number(),zod.boolean()]).nullable()).describe('Responses keyed by imported template field id.')
 })
 export const ListVisitsResponse = zod.array(ListVisitsResponseItem)
 
@@ -312,13 +372,20 @@ export const getVisitResponseServerVersionMin = 0;
 
 
 
+export const getVisitResponseTemplateSha256Min = 64;
+export const getVisitResponseTemplateSha256Max = 64;
+
+export const getVisitResponseTemplateFieldsItemConfidenceMin = 0;
+export const getVisitResponseTemplateFieldsItemConfidenceMax = 1;
+
+
 
 export const GetVisitResponse = zod.object({
   "visitId": zod.string().min(1),
-  "siteId": zod.string(),
-  "siteName": zod.string(),
-  "workOrder": zod.string(),
-  "technician": zod.string(),
+  "siteId": zod.string().optional(),
+  "siteName": zod.string().optional(),
+  "workOrder": zod.string().optional(),
+  "technician": zod.string().optional(),
   "visitDate": zod.coerce.date(),
   "lifecycleStatus": zod.enum(['BORRADOR', 'ABIERTA', 'CERRADA', 'REABIERTA']),
   "syncStatus": zod.enum(['PENDIENTE', 'SINCRONIZANDO', 'SINCRONIZADO', 'ERROR']),
@@ -334,6 +401,7 @@ export const GetVisitResponse = zod.object({
   "points": zod.array(zod.object({
   "id": zod.string().min(1),
   "title": zod.string(),
+  "fields": zod.record(zod.string(), zod.union([zod.string(),zod.number(),zod.boolean()]).nullable()).optional().describe('Template-driven responses keyed by catalog field id.'),
   "status": zod.enum(['PENDING', 'OK', 'NOK', 'SC', 'NA']),
   "findings": zod.array(zod.object({
   "id": zod.string().min(1),
@@ -368,7 +436,237 @@ export const GetVisitResponse = zod.object({
   "uploadStatus": zod.enum(['pending', 'uploading', 'uploaded', 'failed']),
   "contentType": zod.string().nullish(),
   "size": zod.number().int().min(1).nullish()
+})),
+  "template": zod.object({
+  "version": zod.number().int().min(1),
+  "sha256": zod.string().min(getVisitResponseTemplateSha256Min).max(getVisitResponseTemplateSha256Max)
+}),
+  "templateFields": zod.array(zod.object({
+  "id": zod.string(),
+  "sheet": zod.string(),
+  "subsection": zod.string(),
+  "key": zod.string(),
+  "label": zod.string(),
+  "responseType": zod.enum(['text', 'number', 'date', 'selection', 'measurement', 'observation', 'status']),
+  "options": zod.array(zod.string()),
+  "required": zod.boolean(),
+  "applicability": zod.string(),
+  "evidenceSlot": zod.enum(['photo', 'observation', 'none']),
+  "target": zod.string(),
+  "sourceEvidence": zod.string(),
+  "confidence": zod.number().min(getVisitResponseTemplateFieldsItemConfidenceMin).max(getVisitResponseTemplateFieldsItemConfidenceMax),
+  "state": zod.enum(['mapped', 'ignored', 'unresolved']),
+  "ignoreReason": zod.string().nullish()
+})).describe('Complete immutable catalog revision used by this visit.'),
+  "responses": zod.record(zod.string(), zod.union([zod.string(),zod.number(),zod.boolean()]).nullable()).describe('Responses keyed by imported template field id.')
+})
+
+
+/**
+ * @summary Get the owner's current Excel template descriptor, catalog, and audit
+ */
+export const getCurrentTemplateResponseVersionMin = 0;
+
+export const getCurrentTemplateResponseCatalogItemConfidenceMin = 0;
+export const getCurrentTemplateResponseCatalogItemConfidenceMax = 1;
+
+export const getCurrentTemplateResponseUnmappedItemConfidenceMin = 0;
+export const getCurrentTemplateResponseUnmappedItemConfidenceMax = 1;
+
+
+
+export const GetCurrentTemplateResponse = zod.object({
+  "ready": zod.boolean(),
+  "version": zod.number().int().min(getCurrentTemplateResponseVersionMin),
+  "fileName": zod.string().nullable(),
+  "sha256": zod.string().nullable(),
+  "catalog": zod.array(zod.object({
+  "id": zod.string(),
+  "sheet": zod.string(),
+  "subsection": zod.string(),
+  "key": zod.string(),
+  "label": zod.string(),
+  "responseType": zod.enum(['text', 'number', 'date', 'selection', 'measurement', 'observation', 'status']),
+  "options": zod.array(zod.string()),
+  "required": zod.boolean(),
+  "applicability": zod.string(),
+  "evidenceSlot": zod.enum(['photo', 'observation', 'none']),
+  "target": zod.string(),
+  "sourceEvidence": zod.string(),
+  "confidence": zod.number().min(getCurrentTemplateResponseCatalogItemConfidenceMin).max(getCurrentTemplateResponseCatalogItemConfidenceMax),
+  "state": zod.enum(['mapped', 'ignored', 'unresolved']),
+  "ignoreReason": zod.string().nullish()
+})),
+  "unmapped": zod.array(zod.object({
+  "target": zod.string(),
+  "sheet": zod.string(),
+  "reason": zod.string(),
+  "confidence": zod.number().min(getCurrentTemplateResponseUnmappedItemConfidenceMin).max(getCurrentTemplateResponseUnmappedItemConfidenceMax),
+  "state": zod.enum(['unresolved', 'ignored']),
+  "ignoreReason": zod.string().nullish()
+})),
+  "audit": zod.array(zod.record(zod.string(), zod.unknown()))
+})
+
+
+/**
+ * @summary Parse and explicitly replace the owner's Excel source template
+ */
+
+
+
+
+export const ImportTemplateBody = zod.object({
+  "fileName": zod.string().min(1),
+  "contentBase64": zod.string().min(1),
+  "replace": zod.boolean()
+})
+
+export const importTemplateResponseVersionMin = 0;
+
+export const importTemplateResponseCatalogItemConfidenceMin = 0;
+export const importTemplateResponseCatalogItemConfidenceMax = 1;
+
+export const importTemplateResponseUnmappedItemConfidenceMin = 0;
+export const importTemplateResponseUnmappedItemConfidenceMax = 1;
+
+
+
+export const ImportTemplateResponse = zod.object({
+  "ready": zod.boolean(),
+  "version": zod.number().int().min(importTemplateResponseVersionMin),
+  "fileName": zod.string().nullable(),
+  "sha256": zod.string().nullable(),
+  "catalog": zod.array(zod.object({
+  "id": zod.string(),
+  "sheet": zod.string(),
+  "subsection": zod.string(),
+  "key": zod.string(),
+  "label": zod.string(),
+  "responseType": zod.enum(['text', 'number', 'date', 'selection', 'measurement', 'observation', 'status']),
+  "options": zod.array(zod.string()),
+  "required": zod.boolean(),
+  "applicability": zod.string(),
+  "evidenceSlot": zod.enum(['photo', 'observation', 'none']),
+  "target": zod.string(),
+  "sourceEvidence": zod.string(),
+  "confidence": zod.number().min(importTemplateResponseCatalogItemConfidenceMin).max(importTemplateResponseCatalogItemConfidenceMax),
+  "state": zod.enum(['mapped', 'ignored', 'unresolved']),
+  "ignoreReason": zod.string().nullish()
+})),
+  "unmapped": zod.array(zod.object({
+  "target": zod.string(),
+  "sheet": zod.string(),
+  "reason": zod.string(),
+  "confidence": zod.number().min(importTemplateResponseUnmappedItemConfidenceMin).max(importTemplateResponseUnmappedItemConfidenceMax),
+  "state": zod.enum(['unresolved', 'ignored']),
+  "ignoreReason": zod.string().nullish()
+})),
+  "audit": zod.array(zod.record(zod.string(), zod.unknown()))
+})
+
+
+/**
+ * @summary Resolve or explicitly ignore unresolved template candidates
+ */
+
+
+export const patchTemplateMappingsBodyMappingsItemFieldConfidenceMin = 0;
+export const patchTemplateMappingsBodyMappingsItemFieldConfidenceMax = 1;
+
+
+
+export const PatchTemplateMappingsBody = zod.object({
+  "version": zod.number().int().min(1),
+  "mappings": zod.array(zod.object({
+  "candidateTarget": zod.string().min(1),
+  "field": zod.object({
+  "id": zod.string(),
+  "sheet": zod.string(),
+  "subsection": zod.string(),
+  "key": zod.string(),
+  "label": zod.string(),
+  "responseType": zod.enum(['text', 'number', 'date', 'selection', 'measurement', 'observation', 'status']),
+  "options": zod.array(zod.string()),
+  "required": zod.boolean(),
+  "applicability": zod.string(),
+  "evidenceSlot": zod.enum(['photo', 'observation', 'none']),
+  "target": zod.string(),
+  "sourceEvidence": zod.string(),
+  "confidence": zod.number().min(patchTemplateMappingsBodyMappingsItemFieldConfidenceMin).max(patchTemplateMappingsBodyMappingsItemFieldConfidenceMax),
+  "state": zod.enum(['mapped', 'ignored', 'unresolved']),
+  "ignoreReason": zod.string().nullish()
+}).optional(),
+  "state": zod.enum(['mapped', 'ignored']),
+  "ignoreReason": zod.string().nullish()
 }))
+})
+
+export const patchTemplateMappingsResponseVersionMin = 0;
+
+export const patchTemplateMappingsResponseCatalogItemConfidenceMin = 0;
+export const patchTemplateMappingsResponseCatalogItemConfidenceMax = 1;
+
+export const patchTemplateMappingsResponseUnmappedItemConfidenceMin = 0;
+export const patchTemplateMappingsResponseUnmappedItemConfidenceMax = 1;
+
+
+
+export const PatchTemplateMappingsResponse = zod.object({
+  "ready": zod.boolean(),
+  "version": zod.number().int().min(patchTemplateMappingsResponseVersionMin),
+  "fileName": zod.string().nullable(),
+  "sha256": zod.string().nullable(),
+  "catalog": zod.array(zod.object({
+  "id": zod.string(),
+  "sheet": zod.string(),
+  "subsection": zod.string(),
+  "key": zod.string(),
+  "label": zod.string(),
+  "responseType": zod.enum(['text', 'number', 'date', 'selection', 'measurement', 'observation', 'status']),
+  "options": zod.array(zod.string()),
+  "required": zod.boolean(),
+  "applicability": zod.string(),
+  "evidenceSlot": zod.enum(['photo', 'observation', 'none']),
+  "target": zod.string(),
+  "sourceEvidence": zod.string(),
+  "confidence": zod.number().min(patchTemplateMappingsResponseCatalogItemConfidenceMin).max(patchTemplateMappingsResponseCatalogItemConfidenceMax),
+  "state": zod.enum(['mapped', 'ignored', 'unresolved']),
+  "ignoreReason": zod.string().nullish()
+})),
+  "unmapped": zod.array(zod.object({
+  "target": zod.string(),
+  "sheet": zod.string(),
+  "reason": zod.string(),
+  "confidence": zod.number().min(patchTemplateMappingsResponseUnmappedItemConfidenceMin).max(patchTemplateMappingsResponseUnmappedItemConfidenceMax),
+  "state": zod.enum(['unresolved', 'ignored']),
+  "ignoreReason": zod.string().nullish()
+})),
+  "audit": zod.array(zod.record(zod.string(), zod.unknown()))
+})
+
+
+/**
+ * @summary Fill and export the original workbook without reconstructing its layout
+ */
+
+
+
+export const ExportTemplateBody = zod.object({
+  "visitId": zod.string().min(1),
+  "format": zod.enum(['xlsx', 'pdf'])
+})
+
+export const ExportTemplateResponse = zod.object({
+  "fileName": zod.string(),
+  "contentBase64": zod.string(),
+  "mime": zod.string(),
+  "verification": zod.object({
+  "valid": zod.boolean(),
+  "sheets": zod.array(zod.string()),
+  "writtenTargets": zod.array(zod.string()),
+  "details": zod.array(zod.string()).optional()
+})
 })
 
 

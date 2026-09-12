@@ -9,6 +9,7 @@ import {
 } from "@workspace/api-zod";
 import {
   db,
+  excelTemplatesTable,
   visitAuditEventsTable,
   visitOperationsTable,
   visitPhotosTable,
@@ -33,14 +34,6 @@ const ALLOWED_LIFECYCLE_STATUSES = new Set([
   "CERRADA",
   "REABIERTA",
 ]);
-const REQUIRED_SECTION_NAMES = [
-  "ALARMAS DE FUERZA",
-  "PLANTA HUAWEI",
-  "INFRAESTRUCTURA",
-  "ELECTROMECANICA",
-  "TIERRAS",
-  "TRANSMISION",
-] as const;
 const objectStorageService = new ObjectStorageService();
 
 type AuthenticatedRequest = Request & {
@@ -93,6 +86,76 @@ function validDate(value: unknown): boolean {
   return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
 
+function validateCanonicalResponses(
+  catalog: Array<{
+    id: string;
+    required: boolean;
+    responseType: string;
+    options?: string[];
+  }>,
+  responses: Record<string, unknown>,
+  sections: Array<{
+    points: Array<{
+      id: string;
+      status: string;
+      fields?: Record<string, unknown>;
+      findings: unknown[];
+    }>;
+  }>,
+  requireCompletion: boolean,
+): void {
+  const fieldsById = new Map(catalog.map((field) => [field.id, field]));
+  if (fieldsById.size !== catalog.length) {
+    throw new InvalidSnapshotError("Canonical template catalog contains duplicate field IDs");
+  }
+  for (const id of Object.keys(responses)) {
+    if (!fieldsById.has(id)) {
+      throw new InvalidSnapshotError(`Unknown imported response field: ${id}`);
+    }
+  }
+  for (const field of catalog) {
+    const value = responses[field.id];
+    const empty = value === undefined || value === null || String(value).trim() === "";
+    if (requireCompletion && field.required && empty) {
+      throw new InvalidSnapshotError(`Required imported field ${field.id} is missing`);
+    }
+    if (empty) continue;
+    if ((field.responseType === "number" || field.responseType === "measurement") &&
+      (typeof value !== "number" || !Number.isFinite(value))) {
+      throw new InvalidSnapshotError(`Imported field ${field.id} must be numeric`);
+    }
+    if ((field.responseType === "text" || field.responseType === "observation") &&
+      typeof value !== "string") {
+      throw new InvalidSnapshotError(`Imported field ${field.id} must be text`);
+    }
+    if (field.responseType === "date" &&
+      (typeof value !== "string" || Number.isNaN(Date.parse(value)))) {
+      throw new InvalidSnapshotError(`Imported field ${field.id} must be a valid date`);
+    }
+    if ((field.responseType === "selection" || field.responseType === "status") &&
+      (!field.options?.includes(String(value)))) {
+      throw new InvalidSnapshotError(`Imported field ${field.id} has an invalid option`);
+    }
+    if (field.responseType === "status") {
+      const matches = sections.flatMap((section) => section.points).filter((point) =>
+        point.fields && Object.prototype.hasOwnProperty.call(point.fields, field.id),
+      );
+      if (matches.length !== 1 || String(matches[0].fields?.[field.id]) !== String(value)) {
+        throw new InvalidSnapshotError(`Status response ${field.id} is not bound to exactly one point`);
+      }
+      const canonicalStatus = String(value).toUpperCase();
+      if (["OK", "SC", "NA", "NOK"].includes(canonicalStatus) &&
+        matches[0].status !== canonicalStatus) {
+        throw new InvalidSnapshotError(`Point status does not match canonical response ${field.id}`);
+      }
+      if (canonicalStatus === "NOK" &&
+        matches[0].findings.length === 0) {
+        throw new InvalidSnapshotError(`NOK status ${field.id} requires a NOK point finding`);
+      }
+    }
+  }
+}
+
 function eventKind(eventType: string): "closed" | "reopened" | null {
   const normalized = eventType.trim().toUpperCase();
   if (
@@ -126,11 +189,11 @@ function hasNewTransitionEvent(
 }
 
 function validateSnapshot(snapshot: {
-  siteId: string;
-  siteName: string;
-  workOrder: string;
-  technician: string;
-  visitDate: Date;
+  siteId?: string;
+  siteName?: string;
+  workOrder?: string;
+  technician?: string;
+  visitDate?: Date | null;
   lifecycleStatus: string;
   closedAt: Date | null;
   reopenedAt: Date | null;
@@ -166,50 +229,37 @@ function validateSnapshot(snapshot: {
     eventType: string;
     actorId?: string | null;
   }>;
+  templateFields?: Array<{
+    id: string;
+    required: boolean;
+    responseType: string;
+  }>;
+  responses?: Record<string, unknown>;
 }, requireCompletion: boolean): void {
+  validateCanonicalResponses(snapshot.templateFields ?? [], snapshot.responses ?? {}, snapshot.sections, requireCompletion);
   if (requireCompletion) {
-    const requiredFields = [
-      ["siteId", snapshot.siteId],
-      ["siteName", snapshot.siteName],
-      ["workOrder", snapshot.workOrder],
-      ["technician", snapshot.technician],
-    ] as const;
-    for (const [name, value] of requiredFields) {
-      if (!value.trim()) throw new InvalidSnapshotError(`${name} is required`);
-    }
-    if (!validDate(snapshot.visitDate.toISOString())) {
-      throw new InvalidSnapshotError("visitDate is required");
+    if (snapshot.visitDate && !validDate(snapshot.visitDate.toISOString())) {
+      throw new InvalidSnapshotError("visitDate is invalid");
     }
   }
 
-  if (snapshot.sections.length !== REQUIRED_SECTION_NAMES.length) {
-    throw new InvalidSnapshotError(
-      `A visit snapshot must contain exactly ${REQUIRED_SECTION_NAMES.length} sections`,
-    );
-  }
   const sectionIds = new Set(snapshot.sections.map((section) => section.id));
-  if (sectionIds.size !== REQUIRED_SECTION_NAMES.length) {
+  if (sectionIds.size !== snapshot.sections.length) {
     throw new InvalidSnapshotError(
       "A visit snapshot cannot contain duplicate section IDs",
     );
   }
   const sectionNames = new Set(snapshot.sections.map((section) => section.name));
-  if (sectionNames.size !== REQUIRED_SECTION_NAMES.length) {
+  if (sectionNames.size !== snapshot.sections.length) {
     throw new InvalidSnapshotError(
       "A visit snapshot cannot contain duplicate section names",
     );
   }
-  for (const sectionName of snapshot.sections.map((section) => section.name)) {
-    if (
-      !(REQUIRED_SECTION_NAMES as readonly string[]).includes(sectionName)
-    ) {
-      throw new InvalidSnapshotError(
-        `Unknown section name: ${sectionName}`,
-      );
-    }
-  }
 
   const allPoints = snapshot.sections.flatMap((section) => section.points);
+  const statusPointsRequired = (snapshot.templateFields ?? []).some(
+    (field) => field.responseType === "status" && field.required,
+  );
   const pointIds = new Set<string>();
   for (const section of snapshot.sections) {
     for (const point of section.points) {
@@ -221,12 +271,12 @@ function validateSnapshot(snapshot: {
       pointIds.add(point.id);
     }
   }
-  if (requireCompletion && allPoints.length === 0) {
+  if (requireCompletion && statusPointsRequired && allPoints.length === 0) {
     throw new InvalidSnapshotError(
       "A confirmed visit must contain checklist points",
     );
   }
-  if (requireCompletion && allPoints.some((point) => point.status === "PENDING")) {
+  if (requireCompletion && statusPointsRequired && allPoints.some((point) => point.status === "PENDING")) {
     throw new InvalidSnapshotError(
       "Every point must be evaluated before confirmation",
     );
@@ -416,6 +466,11 @@ router.post(
 
     try {
       const result = await db.transaction(async (tx) => {
+        // Serialize template replacement/import allocation with visit pin
+        // validation for this owner.
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${`template-owner:${ownerId}`}))`,
+        );
         // Serialize one owner's retries for one operation. This makes the
         // select/insert sequence safe when two devices retry concurrently.
         await tx.execute(
@@ -446,6 +501,41 @@ router.post(
           };
         }
 
+        const [pinnedTemplate] = await tx
+          .select()
+          .from(excelTemplatesTable)
+          .where(
+            and(
+              eq(excelTemplatesTable.ownerId, ownerId),
+              eq(excelTemplatesTable.version, inputSnapshot.template.version),
+            ),
+          );
+        if (!pinnedTemplate) {
+          throw new ConflictError(
+            `Template version ${inputSnapshot.template.version} does not belong to this owner`,
+          );
+        }
+        if (pinnedTemplate.sha256 !== inputSnapshot.template.sha256) {
+          throw new ConflictError("Pinned template SHA-256 does not match the stored version");
+        }
+        if (!pinnedTemplate.ready) {
+          throw new ConflictError("Pinned template is not ready for visits");
+        }
+        const canonicalTemplateFields = pinnedTemplate.catalog as unknown as Array<{
+          id: string;
+          required: boolean;
+          responseType: string;
+          options?: string[];
+        }>;
+        const incomingResponses = inputSnapshot.responses as Record<string, unknown>;
+        validateCanonicalResponses(
+          canonicalTemplateFields,
+          incomingResponses,
+          inputSnapshot.sections,
+          inputSnapshot.lifecycleStatus === "CERRADA" ||
+            inputSnapshot.lifecycleStatus === "REABIERTA",
+        );
+
         await tx.execute(
           sql`select pg_advisory_xact_lock(hashtext(${`${ownerId}:${inputSnapshot.visitId}`}))`,
         );
@@ -458,6 +548,21 @@ router.post(
               eq(visitsTable.visitId, inputSnapshot.visitId),
             ),
           );
+        if (existingVisit) {
+          const retainedSnapshot = existingVisit.snapshot as {
+            template?: { version?: number; sha256?: string };
+            templateFields?: unknown;
+          };
+          if (
+            retainedSnapshot.template?.version !== inputSnapshot.template.version ||
+            retainedSnapshot.template?.sha256 !== inputSnapshot.template.sha256
+          ) {
+            throw new ConflictError("A visit's pinned template cannot change across revisions");
+          }
+          if (canonicalize(retainedSnapshot.templateFields ?? []) !== canonicalize(pinnedTemplate.catalog)) {
+            throw new ConflictError("A visit's canonical template catalog cannot change across revisions");
+          }
+        }
         if (!existingVisit && inputSnapshot.lifecycleStatus === "REABIERTA") {
           throw new ConflictError(
             "A new visit may only start as BORRADOR, ABIERTA, or CERRADA",
@@ -501,6 +606,8 @@ router.post(
         ];
         const persistedSnapshot = {
           ...inputSnapshot,
+          templateFields: canonicalTemplateFields,
+          responses: incomingResponses,
           auditEvents: retainedAuditEvents,
           syncStatus: TRANSIENT_SYNC_STATUS,
           serverVersion: nextVersion,
@@ -690,10 +797,10 @@ router.post(
             ownerId,
             lifecycleStatus: persistedSnapshot.lifecycleStatus,
             syncStatus: TRANSIENT_SYNC_STATUS,
-            siteId: persistedSnapshot.siteId,
-            siteName: persistedSnapshot.siteName,
-            workOrder: persistedSnapshot.workOrder,
-            technician: persistedSnapshot.technician,
+            siteId: persistedSnapshot.siteId ?? "",
+            siteName: persistedSnapshot.siteName ?? "",
+            workOrder: persistedSnapshot.workOrder ?? "",
+            technician: persistedSnapshot.technician ?? "",
             visitDate: persistedSnapshot.visitDate,
             snapshot: persistedSnapshot,
             clientUpdatedAt: persistedSnapshot.clientUpdatedAt,
@@ -706,10 +813,10 @@ router.post(
             set: {
               lifecycleStatus: persistedSnapshot.lifecycleStatus,
               syncStatus: TRANSIENT_SYNC_STATUS,
-              siteId: persistedSnapshot.siteId,
-              siteName: persistedSnapshot.siteName,
-              workOrder: persistedSnapshot.workOrder,
-              technician: persistedSnapshot.technician,
+              siteId: persistedSnapshot.siteId ?? "",
+              siteName: persistedSnapshot.siteName ?? "",
+              workOrder: persistedSnapshot.workOrder ?? "",
+              technician: persistedSnapshot.technician ?? "",
               visitDate: persistedSnapshot.visitDate,
               snapshot: persistedSnapshot,
               clientUpdatedAt: persistedSnapshot.clientUpdatedAt,

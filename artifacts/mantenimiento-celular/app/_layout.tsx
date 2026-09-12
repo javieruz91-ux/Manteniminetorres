@@ -14,6 +14,7 @@ import {
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { VisitProvider } from '@/context/VisitContext';
+import { TemplateProvider } from '@/context/TemplateContext';
 import { useColors } from '@/hooks/useColors';
 import { StatusBar } from 'expo-status-bar';
 
@@ -53,6 +54,7 @@ function RootLayoutNav() {
         }}
       >
         <Stack.Screen name="index" options={{ title: 'Mantenimiento' }} />
+        <Stack.Screen name="settings/template" options={{ title: 'Configuración de plantilla' }} />
         <Stack.Screen name="visit/[id]/index" options={{ title: 'Detalle de Visita' }} />
         <Stack.Screen name="visit/[id]/section/[sectionId]" options={{ title: 'Checklist' }} />
         <Stack.Screen name="visit/[id]/finding/[pointId]" options={{ title: 'Registrar Hallazgo', presentation: 'modal' }} />
@@ -86,9 +88,11 @@ export default function RootLayout() {
           <AuthProvider>
             <GestureHandlerRootView>
               <KeyboardProvider>
-                <VisitProvider>
-                  <RootLayoutNav />
-                </VisitProvider>
+                <TemplateProvider>
+                  <VisitProvider>
+                    <RootLayoutNav />
+                  </VisitProvider>
+                </TemplateProvider>
               </KeyboardProvider>
             </GestureHandlerRootView>
           </AuthProvider>

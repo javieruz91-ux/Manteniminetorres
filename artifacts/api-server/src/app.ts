@@ -29,7 +29,9 @@ app.use(
 );
 app.use(cors({ credentials: true, origin: true }));
 app.use(cookieParser());
-app.use(express.json());
+// Source workbooks are sent as base64 JSON. Keep a bounded but practical
+// limit; parsing still validates the ZIP before any persistence.
+app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(authMiddleware);
 
