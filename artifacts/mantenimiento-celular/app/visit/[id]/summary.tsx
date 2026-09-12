@@ -12,10 +12,11 @@ import * as Crypto from 'expo-crypto';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { generateAndShareXLSX, generateAndSharePDF } from '@/utils/report';
 import { AuditEvent, Finding } from '@/types';
+import { getCloseEligibility } from '@/utils/maintenanceRules';
 
 export default function SummaryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { getVisit, updateVisit, triggerSync, closeVisit, reopenVisit, isOnline } = useVisits();
+  const { getVisit, updateVisit, triggerSync, closeVisit, reopenVisit, isDemoMode } = useVisits();
   const { user, login } = useAuth();
   const colors = useColors();
   const router = useRouter();
@@ -29,55 +30,13 @@ export default function SummaryScreen() {
   if (!visit) return null;
 
   // Exact Validations
-  const isGeneralDataComplete = !!(visit.siteId && visit.siteName && visit.workOrder && visit.technician);
-  
-  let allPointsEvaluated = true;
-  let allNokHaveFindings = true;
-  let missingItems: string[] = [];
-  
-  const isValidDate = (dateString: string) => /^\d{4}-\d{2}-\d{2}$/.test(dateString);
-
-  visit.sections.forEach(section => {
-    section.points.forEach(point => {
-      if (point.status === 'PENDING') {
-        allPointsEvaluated = false;
-        missingItems.push(`Punto sin evaluar: ${section.title} - ${point.title}`);
-      }
-      if (point.status === 'NOK') {
-        const finding = visit.findings.find(f => f.pointId === point.id);
-        if (!finding) {
-          allNokHaveFindings = false;
-          missingItems.push(`Falta hallazgo para punto NOK: ${section.title} - ${point.title}`);
-        } else {
-          // Check finding constraints
-          if (!finding.description || !finding.responsible || !finding.commitmentDate) {
-             allNokHaveFindings = false;
-             missingItems.push(`Datos de hallazgo incompletos en: ${section.title} - ${point.title}`);
-          }
-          if (!isValidDate(finding.commitmentDate)) {
-             allNokHaveFindings = false;
-             missingItems.push(`Fecha de compromiso con formato inválido en: ${section.title} - ${point.title}`);
-          }
-          if (!finding.photos.some(p => p.type === 'ANTES')) {
-             allNokHaveFindings = false;
-             missingItems.push(`Falta foto ANTES en hallazgo: ${section.title} - ${point.title}`);
-          }
-          if (finding.state === 'CORREGIDO') {
-             if (!finding.photos.some(p => p.type === 'DESPUES')) {
-               allNokHaveFindings = false;
-               missingItems.push(`Falta foto DESPUES en hallazgo corregido: ${section.title} - ${point.title}`);
-             }
-             if (!finding.completedDate || !isValidDate(finding.completedDate)) {
-               allNokHaveFindings = false;
-               missingItems.push(`Fecha de corrección inválida en: ${section.title} - ${point.title}`);
-             }
-          }
-        }
-      }
-    });
-  });
-
-  const canClose = isGeneralDataComplete && allPointsEvaluated && allNokHaveFindings;
+  const {
+    generalDataComplete: isGeneralDataComplete,
+    allPointsEvaluated,
+    allNokHaveFindings,
+    missingItems,
+    eligible: canClose,
+  } = getCloseEligibility(visit);
   const isClosed = visit.lifecycleStatus === 'CERRADA';
 
   const createAuditEvent = (action: string, reason: string): AuditEvent => {
@@ -85,7 +44,7 @@ export default function SummaryScreen() {
       id: Crypto.randomUUID(),
       eventType: action,
       occurredAt: new Date().toISOString(),
-      actorId: user?.id || 'unknown',
+      actorId: user?.id || (isDemoMode ? 'demo-technician' : 'unknown'),
       metadata: { reason }
     };
   };
@@ -99,7 +58,7 @@ export default function SummaryScreen() {
       return;
     }
 
-    if (!user) {
+    if (!user && !isDemoMode) {
       Alert.alert(
         'Iniciar Sesión Requerido',
         'Necesitas iniciar sesión para cerrar y sincronizar la visita.',
@@ -123,8 +82,13 @@ export default function SummaryScreen() {
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               const auditEvent = createAuditEvent('CLOSE_VISIT', 'Visita cerrada y lista para sincronización');
               await closeVisit(visit.id, auditEvent);
-              triggerSync();
-              Alert.alert('¡Cerrada!', 'La visita ha sido cerrada y está en cola de sincronización.');
+              if (!isDemoMode) triggerSync();
+              Alert.alert(
+                '¡Cerrada!',
+                isDemoMode
+                  ? 'La visita ficticia quedó cerrada localmente. La sincronización no se verifica en modo demo.'
+                  : 'La visita ha sido cerrada y está en cola de sincronización.',
+              );
             } catch (e: any) {
               Alert.alert('Error', e.message);
             }
@@ -144,7 +108,7 @@ export default function SummaryScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       const auditEvent = createAuditEvent('REOPEN_VISIT', reopenReason);
       await reopenVisit(visit.id, auditEvent);
-      triggerSync(); 
+      if (!isDemoMode) triggerSync();
       setReopenModalVisible(false);
       setReopenReason('');
       Alert.alert('Reabierta', 'La visita ha sido reabierta.');
@@ -154,7 +118,7 @@ export default function SummaryScreen() {
   };
 
   const handleReopenVisit = () => {
-    if (!user) {
+    if (!user && !isDemoMode) {
       Alert.alert('Iniciar Sesión Requerido', 'Necesitas iniciar sesión para reabrir la visita.', [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Iniciar Sesión', onPress: () => login() }
@@ -166,6 +130,13 @@ export default function SummaryScreen() {
   };
 
   const handleManualSync = async () => {
+    if (isDemoMode) {
+      Alert.alert(
+        'Sincronización no verificable',
+        'El modo demo conserva los datos y fotografías únicamente en este dispositivo o navegador.',
+      );
+      return;
+    }
     if (!user) {
       Alert.alert('Iniciar Sesión Requerido', 'Necesitas iniciar sesión para sincronizar.', [
         { text: 'Cancelar', style: 'cancel' },
@@ -221,8 +192,15 @@ export default function SummaryScreen() {
             Ciclo de Vida: <Text style={{ fontFamily: 'Inter_700Bold', color: colors.foreground }}>{visit.lifecycleStatus}</Text>
           </Text>
           <Text style={{ color: colors.mutedForeground, marginBottom: 12 }}>
-            Sincronización: <Text style={{ fontFamily: 'Inter_700Bold', color: colors.foreground }}>{visit.syncStatus}</Text>
+            Sincronización: <Text style={{ fontFamily: 'Inter_700Bold', color: colors.foreground }}>
+              {isDemoMode ? 'NO VERIFICABLE (DEMO)' : visit.syncStatus}
+            </Text>
           </Text>
+          {isDemoMode && (
+            <Text style={[styles.demoNotice, { color: colors.warning }]}>
+              Las fotos permanecen locales y no se suben. Ningún dato ficticio se envía al servidor.
+            </Text>
+          )}
           
           <ValidationItem ok={isGeneralDataComplete} text="Datos generales completos" />
           <ValidationItem ok={allPointsEvaluated} text="Todos los puntos de checklist evaluados" />
@@ -369,6 +347,12 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: 'Inter_700Bold',
     marginBottom: 16,
+  },
+  demoNotice: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
   },
   valItem: {
     flexDirection: 'row',

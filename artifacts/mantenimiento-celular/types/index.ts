@@ -76,4 +76,5 @@ export interface Visit {
   syncAttemptCount?: number;
   nextAttemptAt?: number;
   syncError?: string;
+  demoOnly?: boolean;
 }

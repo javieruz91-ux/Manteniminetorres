@@ -10,7 +10,15 @@ import { VisitSyncInput, VisitPhoto, VisitPhotoUploadStatus, UploadUrlRequestCon
 import { Platform } from 'react-native';
 import { useAuth } from '@/lib/auth';
 import * as SecureStore from 'expo-secure-store';
-import { createInitialSections } from '../data/checklist';
+import {
+  closeVisit as closeVisitRules,
+  createDraftVisit,
+  reopenVisit as reopenVisitRules,
+  isSyncDue,
+  retryDelayMs,
+  saveFindingAndStatus as saveFindingAndStatusRules,
+  setPointStatus,
+} from '../utils/maintenanceRules';
 
 interface VisitContextValue {
   visits: Visit[];
@@ -24,8 +32,10 @@ interface VisitContextValue {
   updatePointStatus: (visitId: string, sectionId: string, pointId: string, status: ChecklistStatus) => Promise<void>;
   saveFindingAndStatus: (visitId: string, pointId: string, sectionId: string, status: ChecklistStatus, finding: Finding | null) => Promise<void>;
   getVisit: (id: string) => Visit | undefined;
-  savePhoto: (tempUri: string, visitId: string) => Promise<string>;
+  savePhoto: (tempUri: string, visitId: string, photoId?: string) => Promise<string>;
   triggerSync: () => void;
+  isDemoMode: boolean;
+  resetDemoData: () => Promise<string>;
 }
 
 const VisitContext = createContext<VisitContextValue | null>(null);
@@ -36,16 +46,90 @@ export function VisitProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(true);
   const { user, isAuthenticated } = useAuth();
+  const isDemoMode = __DEV__ && !isAuthenticated && process.env.EXPO_PUBLIC_DEMO_MODE !== 'false';
   
   const isHydrated = useRef(false);
-  const currentNamespace = `@mantenimiento_visits_${user?.id || 'guest'}`;
+  const currentNamespace = isDemoMode
+    ? '@mantenimiento_demo_v1'
+    : `@mantenimiento_visits_${user?.id || 'guest'}`;
+  const cleanupNamespace = `${currentNamespace}_photo_cleanup`;
   const persistQueue = useRef(Promise.resolve<any>(null));
+  const photoCleanupQueue = useRef(Promise.resolve<void>(undefined));
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const serializePhotoCleanup = <T,>(operation: () => Promise<T>): Promise<T> => {
+    const result = photoCleanupQueue.current.catch(() => undefined).then(operation);
+    photoCleanupQueue.current = result.then(() => undefined, () => undefined);
+    return result;
+  };
+
+  const enqueuePhotoCleanupFor = (
+    namespace: string,
+    photos: Photo[],
+  ): Promise<void> => serializePhotoCleanup(async () => {
+    if (photos.length === 0) return;
+    const stored = await AsyncStorage.getItem(namespace);
+    const pending: Photo[] = stored ? JSON.parse(stored) : [];
+    const merged = new Map([...pending, ...photos].map(photo => [photo.id, photo]));
+    await AsyncStorage.setItem(namespace, JSON.stringify([...merged.values()]));
+  });
+
+  const flushPhotoCleanupFor = (
+    namespace: string,
+    currentVisits: Visit[],
+  ): Promise<void> => serializePhotoCleanup(async () => {
+    const stored = await AsyncStorage.getItem(namespace);
+    if (!stored) return;
+    const pending: Photo[] = JSON.parse(stored);
+    const referencedIds = new Set(
+      currentVisits.flatMap(visit =>
+        visit.findings.flatMap(finding => finding.photos.map(photo => photo.id)),
+      ),
+    );
+    const failed: Photo[] = [];
+    for (const photo of pending) {
+      if (referencedIds.has(photo.id)) continue;
+      try {
+        if (Platform.OS === 'web') {
+          if (photo.uri.startsWith('blob:')) URL.revokeObjectURL(photo.uri);
+        } else if (
+          FileSystem.documentDirectory &&
+          photo.uri.startsWith(FileSystem.documentDirectory)
+        ) {
+          await FileSystem.deleteAsync(photo.uri, { idempotent: true });
+        }
+      } catch {
+        failed.push(photo);
+      }
+    }
+    if (failed.length > 0) {
+      await AsyncStorage.setItem(namespace, JSON.stringify(failed));
+    } else {
+      await AsyncStorage.removeItem(namespace);
+    }
+  });
+
+  const enqueuePhotoCleanup = (photos: Photo[]) =>
+    enqueuePhotoCleanupFor(cleanupNamespace, photos);
+  const flushPhotoCleanup = (currentVisits: Visit[]) =>
+    flushPhotoCleanupFor(cleanupNamespace, currentVisits);
 
   // 1. Awaitable Persistence Barrier
   const updateAndPersist = useCallback((updater: (prev: Visit[]) => Visit[]): Promise<Visit[]> => {
     const nextPromise = persistQueue.current.catch(() => null).then(async () => {
-      const nextState = updater(visitsRef.current);
+      const previousState = visitsRef.current;
+      const nextState = updater(previousState);
+      const nextPhotoIds = new Set(
+        nextState.flatMap(visit =>
+          visit.findings.flatMap(finding => finding.photos.map(photo => photo.id)),
+        ),
+      );
+      const removedPhotos = previousState.flatMap(visit =>
+        visit.findings.flatMap(finding =>
+          finding.photos.filter(photo => !nextPhotoIds.has(photo.id)),
+        ),
+      );
+      await enqueuePhotoCleanup(removedPhotos);
       const stateToSave = nextState.map(v => Platform.OS === 'web' ? {
         ...v,
         findings: v.findings.map(f => ({
@@ -59,6 +143,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       await AsyncStorage.setItem(currentNamespace, JSON.stringify(stateToSave));
       visitsRef.current = nextState;
       setVisits(nextState);
+      await flushPhotoCleanup(nextState);
       return nextState;
     });
     // Set queue tail to a promise that always resolves internally, but return the one that can reject to caller
@@ -67,7 +152,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       return null;
     });
     return nextPromise;
-  }, [currentNamespace]);
+  }, [currentNamespace, cleanupNamespace]);
 
   const mutateVisits = useCallback((updater: (prev: Visit[]) => Visit[]) => {
     updateAndPersist(updater).catch(e => console.error("mutateVisits error", e));
@@ -184,9 +269,9 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       setIsLoading(true);
       setVisits([]); // clear while switching
       isHydrated.current = false;
+      let parsed: Visit[] = [];
       try {
         const stored = await AsyncStorage.getItem(currentNamespace);
-        let parsed: Visit[] = [];
         if (stored) {
           parsed = JSON.parse(stored);
           // Crash recovery: revert SINCRONIZANDO -> PENDIENTE, preserving exact operationId
@@ -211,6 +296,9 @@ export function VisitProvider({ children }: { children: ReactNode }) {
           isHydrated.current = true;
           setIsLoading(false);
           fetchAndMergeServerVisits();
+          flushPhotoCleanup(parsed).catch(error =>
+            console.warn('No se pudo completar la limpieza local de fotografías', error),
+          );
         }
       }
     };
@@ -236,7 +324,16 @@ export function VisitProvider({ children }: { children: ReactNode }) {
                       text: 'No, descartar', 
                       style: 'destructive',
                       onPress: async () => {
+                        const guestCleanupNamespace =
+                          '@mantenimiento_visits_guest_photo_cleanup';
+                        await enqueuePhotoCleanupFor(
+                          guestCleanupNamespace,
+                          guestVisits.flatMap(visit =>
+                            visit.findings.flatMap(finding => finding.photos),
+                          ),
+                        );
                         await AsyncStorage.removeItem('@mantenimiento_visits_guest');
+                        await flushPhotoCleanupFor(guestCleanupNamespace, []);
                       }
                     },
                     {
@@ -274,28 +371,37 @@ export function VisitProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const createVisit = async (data: Partial<Visit>): Promise<string> => {
-    const newVisit: Visit = {
-      id: Crypto.randomUUID(),
-      siteId: data.siteId || '',
-      siteName: data.siteName || '',
-      workOrder: data.workOrder || '',
-      technician: data.technician || '',
-      visitDate: new Date().toISOString(),
-      clientUpdatedAt: new Date().toISOString(),
-      lifecycleStatus: 'BORRADOR',
-      syncStatus: 'PENDIENTE',
-      closedAt: null,
-      reopenedAt: null,
-      serverVersion: 0,
-      sections: createInitialSections(),
-      findings: [],
-      auditEvents: [],
-      operationId: Crypto.randomUUID(),
-      syncAttemptCount: 0
-    };
+    const newVisit = createDraftVisit(data, {
+      id: () => Crypto.randomUUID(),
+      now: () => new Date().toISOString(),
+    });
+    newVisit.demoOnly = isDemoMode;
     
     await updateAndPersist(prev => [newVisit, ...prev]);
     return newVisit.id;
+  };
+
+  const resetDemoData = async (): Promise<string> => {
+    if (!isDemoMode) {
+      throw new Error('El modo demo solo está disponible durante el desarrollo.');
+    }
+    const demoVisit = createDraftVisit(
+      {
+        siteId: 'DEMO-SITIO-001',
+        siteName: 'Sitio ficticio de capacitación',
+        workOrder: 'OT-DEMO-001',
+        technician: 'Técnico de demostración',
+      },
+      {
+        id: () => Crypto.randomUUID(),
+        now: () => new Date().toISOString(),
+      },
+    );
+    demoVisit.demoOnly = true;
+    demoVisit.syncError =
+      'Modo demo: la sincronización y la subida de fotografías no se envían al servidor.';
+    await updateAndPersist(() => [demoVisit]);
+    return demoVisit.id;
   };
 
   const updateVisit = async (id: string, data: Partial<Visit>): Promise<void> => {
@@ -326,26 +432,11 @@ export function VisitProvider({ children }: { children: ReactNode }) {
     await updateAndPersist(prev => {
       const existing = prev.find(v => v.id === id);
       if (!existing) throw new Error("Visita no encontrada");
-      if (existing.lifecycleStatus !== 'BORRADOR' && existing.lifecycleStatus !== 'ABIERTA' && existing.lifecycleStatus !== 'REABIERTA') {
-        throw new Error("Transición inválida: Solo visitas abiertas pueden ser cerradas.");
-      }
-      
-      return prev.map(v => {
-        if (v.id === id) {
-          return {
-            ...v,
-            lifecycleStatus: 'CERRADA',
-            closedAt: new Date().toISOString(),
-            auditEvents: [...v.auditEvents, auditEvent],
-            nextAttemptAt: Date.now(),
-            syncAttemptCount: 0,
-            syncStatus: 'PENDIENTE',
-            operationId: Crypto.randomUUID(),
-            clientUpdatedAt: new Date().toISOString()
-          };
-        }
-        return v;
+      const closed = closeVisitRules(existing, auditEvent, {
+        id: () => Crypto.randomUUID(),
+        now: () => new Date().toISOString(),
       });
+      return prev.map(v => v.id === id ? closed : v);
     });
   };
 
@@ -353,26 +444,11 @@ export function VisitProvider({ children }: { children: ReactNode }) {
     await updateAndPersist(prev => {
       const existing = prev.find(v => v.id === id);
       if (!existing) throw new Error("Visita no encontrada");
-      if (existing.lifecycleStatus !== 'CERRADA') {
-        throw new Error("Transición inválida: Solo visitas cerradas pueden ser reabiertas.");
-      }
-      
-      return prev.map(v => {
-        if (v.id === id) {
-          return {
-            ...v,
-            lifecycleStatus: 'REABIERTA',
-            reopenedAt: new Date().toISOString(),
-            auditEvents: [...v.auditEvents, auditEvent],
-            nextAttemptAt: Date.now(),
-            syncAttemptCount: 0,
-            syncStatus: 'PENDIENTE',
-            operationId: Crypto.randomUUID(),
-            clientUpdatedAt: new Date().toISOString()
-          };
-        }
-        return v;
+      const reopened = reopenVisitRules(existing, auditEvent, {
+        id: () => Crypto.randomUUID(),
+        now: () => new Date().toISOString(),
       });
+      return prev.map(v => v.id === id ? reopened : v);
     });
   };
 
@@ -394,21 +470,11 @@ export function VisitProvider({ children }: { children: ReactNode }) {
     await updateAndPersist(prev => {
       const existing = prev.find(v => v.id === visitId);
       if (!existing) throw new Error("Visita no encontrada");
-      if (existing.lifecycleStatus === 'CERRADA') throw new Error("No se puede editar una visita cerrada.");
-
-      return prev.map(v => {
-        if (v.id === visitId) {
-          const sections = v.sections.map(s => {
-            if (s.id === sectionId) {
-              const points = s.points.map(p => p.id === pointId ? { ...p, status } : p);
-              return { ...s, points };
-            }
-            return s;
-          });
-          return { ...v, sections, clientUpdatedAt: new Date().toISOString(), operationId: Crypto.randomUUID(), syncStatus: 'PENDIENTE' };
-        }
-        return v;
+      const updated = setPointStatus(existing, sectionId, pointId, status, {
+        id: () => Crypto.randomUUID(),
+        now: () => new Date().toISOString(),
       });
+      return prev.map(v => v.id === visitId ? updated : v);
     });
   };
 
@@ -416,38 +482,19 @@ export function VisitProvider({ children }: { children: ReactNode }) {
     await updateAndPersist(prev => {
       const existing = prev.find(v => v.id === visitId);
       if (!existing) throw new Error("Visita no encontrada");
-      if (existing.lifecycleStatus === 'CERRADA') throw new Error("No se puede editar una visita cerrada.");
-
-      return prev.map(v => {
-        if (v.id === visitId) {
-          const sections = v.sections.map(s => {
-            if (s.id === sectionId) {
-              const points = s.points.map(p => p.id === pointId ? { ...p, status } : p);
-              return { ...s, points };
-            }
-            return s;
-          });
-          
-          let findings = [...v.findings];
-          if (finding) {
-            const existingIdx = findings.findIndex(f => f.id === finding.id);
-            if (existingIdx >= 0) {
-              findings[existingIdx] = finding;
-            } else {
-              findings.push(finding);
-            }
-          } else {
-            findings = findings.filter(f => f.pointId !== pointId);
-          }
-
-          return { ...v, sections, findings, clientUpdatedAt: new Date().toISOString(), operationId: Crypto.randomUUID(), syncStatus: 'PENDIENTE' };
-        }
-        return v;
+      const updated = saveFindingAndStatusRules(existing, sectionId, pointId, status, finding, {
+        id: () => Crypto.randomUUID(),
+        now: () => new Date().toISOString(),
       });
+      return prev.map(v => v.id === visitId ? updated : v);
     });
   };
 
-  const savePhoto = async (tempUri: string, visitId: string): Promise<string> => {
+  const savePhoto = async (
+    tempUri: string,
+    visitId: string,
+    photoId?: string,
+  ): Promise<string> => {
     if (Platform.OS === 'web') return tempUri;
     
     const ext = tempUri.split('.').pop() || 'jpg';
@@ -460,6 +507,22 @@ export function VisitProvider({ children }: { children: ReactNode }) {
     if (!fileInfo.exists) {
       throw new Error('Failed to copy file to documentDirectory');
     }
+    // A copied file is provisional until a visit mutation references it. If
+    // persistence fails, the durable cleanup queue removes it on the next
+    // successful write or app hydration.
+    try {
+      await enqueuePhotoCleanup([{
+        id: photoId ?? newName,
+        uri: dest,
+        type: 'GENERAL',
+        timestamp: Date.now(),
+        objectPath: null,
+        uploadStatus: 'pending',
+      }]);
+    } catch (error) {
+      await FileSystem.deleteAsync(dest, { idempotent: true }).catch(() => undefined);
+      throw error;
+    }
     
     return dest;
   };
@@ -470,12 +533,9 @@ export function VisitProvider({ children }: { children: ReactNode }) {
   const isSyncing = useRef(false);
 
   const processSyncQueue = useCallback(async () => {
-    if (isSyncing.current || !isOnline || !isHydrated.current || !isAuthenticated) return;
+    if (isDemoMode || isSyncing.current || !isOnline || !isHydrated.current || !isAuthenticated) return;
     
-    let pendingVisits = visitsRef.current.filter(v => 
-      (v.syncStatus === 'PENDIENTE' || v.syncStatus === 'ERROR') && 
-      (v.nextAttemptAt || 0) <= Date.now()
-    );
+    let pendingVisits = visitsRef.current.filter(v => isSyncDue(v));
     
     if (pendingVisits.length === 0) return;
 
@@ -585,7 +645,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
           console.error('Visit sync failed early', err);
           await updateAndPersist(prev => prev.map(pv => {
             if (pv.id === latestV!.id) {
-              const delay = Math.min(1000 * Math.pow(2, pv.syncAttemptCount || 1), 1000 * 60 * 60);
+              const delay = retryDelayMs(pv.syncAttemptCount || 1);
               return { ...pv, syncStatus: 'ERROR', syncError: err.message || 'Error', nextAttemptAt: Date.now() + delay };
             }
             return pv;
@@ -683,7 +743,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
         } catch (err: any) {
           await updateAndPersist(prev => prev.map(pv => {
             if (pv.id === currentV.id && pv.operationId === currentV.operationId) {
-              const delay = Math.min(1000 * Math.pow(2, pv.syncAttemptCount || 1), 1000 * 60 * 60);
+              const delay = retryDelayMs(pv.syncAttemptCount || 1);
               return { ...pv, syncStatus: 'ERROR', syncError: err.message || 'Error desconocido', nextAttemptAt: Date.now() + delay };
             }
             return pv;
@@ -693,7 +753,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
     } finally {
       isSyncing.current = false;
     }
-  }, [isOnline, isAuthenticated, updateAndPersist]);
+  }, [isDemoMode, isOnline, isAuthenticated, updateAndPersist]);
 
   const scheduleNextSync = useCallback(() => {
     if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
@@ -752,7 +812,9 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       saveFindingAndStatus,
       getVisit,
       savePhoto,
-      triggerSync
+      triggerSync,
+      isDemoMode,
+      resetDemoData
     }}>
       {children}
     </VisitContext.Provider>

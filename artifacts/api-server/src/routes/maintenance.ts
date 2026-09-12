@@ -40,10 +40,6 @@ const REQUIRED_SECTION_NAMES = [
   "ELECTROMECANICA",
   "TIERRAS",
   "TRANSMISION",
-  "RADIOFRECUENCIA",
-  "ENERGIA SOLAR",
-  "SISTEMA DE SEGURIDAD",
-  "OBRA CIVIL",
 ] as const;
 const objectStorageService = new ObjectStorageService();
 
@@ -827,6 +823,46 @@ router.post(
           };
         }
         return { confirmation, replay: false };
+      });
+
+      // Reconcile durable photo metadata with the accepted snapshot. Object
+      // deletion happens before row deletion so a failed cleanup remains
+      // retryable on an idempotent replay instead of becoming invisible.
+      const incomingPhotoIds = new Set(parsed.data.photos.map((photo) => photo.localId));
+      await db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${`${ownerId}:${inputSnapshot.visitId}`}))`,
+        );
+        const [currentVisit] = await tx
+          .select({ serverVersion: visitsTable.serverVersion })
+          .from(visitsTable)
+          .where(
+            and(
+              eq(visitsTable.ownerId, ownerId),
+              eq(visitsTable.visitId, inputSnapshot.visitId),
+            ),
+          );
+        // A stale replay must never delete photos accepted by a newer revision.
+        if (currentVisit?.serverVersion !== result.confirmation.serverVersion) return;
+
+        const storedPhotos = await tx
+          .select()
+          .from(visitPhotosTable)
+          .where(
+            and(
+              eq(visitPhotosTable.ownerId, ownerId),
+              eq(visitPhotosTable.visitId, inputSnapshot.visitId),
+            ),
+          );
+        for (const stalePhoto of storedPhotos) {
+          if (incomingPhotoIds.has(stalePhoto.localId)) continue;
+          if (stalePhoto.objectPath) {
+            await objectStorageService.deleteObjectEntity(stalePhoto.objectPath);
+          }
+          await tx
+            .delete(visitPhotosTable)
+            .where(eq(visitPhotosTable.id, stalePhoto.id));
+        }
       });
 
       res.json(

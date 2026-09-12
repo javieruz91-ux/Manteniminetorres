@@ -69,7 +69,7 @@ export default function FindingModalScreen() {
         if (Platform.OS === 'web' || p.uri.startsWith('http') || (FileSystem.documentDirectory && p.uri.includes(FileSystem.documentDirectory))) {
            return p;
         }
-        const newUri = await savePhoto(p.uri, id);
+        const newUri = await savePhoto(p.uri, id, p.id);
         return { ...p, uri: newUri };
       }));
 

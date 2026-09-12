@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
 import { useVisits } from '@/context/VisitContext';
 import { useAuth } from '@/lib/auth';
 import { useColors } from '@/hooks/useColors';
@@ -12,15 +12,24 @@ import { Badge } from '@/components/Badge';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function DashboardScreen() {
-  const { visits, isLoading: visitsLoading, createVisit, isOnline } = useVisits();
+  const { visits, createVisit, isOnline, isDemoMode, resetDemoData } = useVisits();
   const { user, login, logout, isAuthenticated } = useAuth();
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const handleStartVisit = () => {
-    const id = createVisit({});
+  const handleStartVisit = async () => {
+    const id = await createVisit({});
     router.push(`/visit/${id}`);
+  };
+
+  const handleResetDemo = async () => {
+    try {
+      const id = await resetDemoData();
+      router.push(`/visit/${id}`);
+    } catch (error) {
+      Alert.alert('No se pudo reiniciar', error instanceof Error ? error.message : 'Error desconocido');
+    }
   };
 
   const getLifecycleColor = (status: string) => {
@@ -86,6 +95,26 @@ export default function DashboardScreen() {
         </Text>
       </View>
 
+      {isDemoMode && (
+        <View style={[styles.demoBanner, { backgroundColor: colors.warning }]}>
+          <View style={styles.demoCopy}>
+            <Text style={styles.demoTitle}>MODO DEMO · DATOS FICTICIOS</Text>
+            <Text style={styles.demoText}>
+              Permite probar el flujo completo. No sincroniza ni sube fotografías.
+            </Text>
+          </View>
+          <TouchableOpacity
+            accessibilityRole="button"
+            testID="btn-reset-demo"
+            onPress={handleResetDemo}
+            style={styles.demoReset}
+          >
+            <Feather name="refresh-cw" size={14} color="#7C2D12" />
+            <Text style={styles.demoResetText}>Reiniciar demo</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       <FlatList
         data={visits}
         keyExtractor={v => v.id}
@@ -106,6 +135,12 @@ export default function DashboardScreen() {
                       text: '#FFF'
                     }}
                   />
+                  {item.demoOnly && (
+                    <Badge
+                      text="FICTICIA"
+                      customColor={{ bg: colors.warning, text: '#422006' }}
+                    />
+                  )}
                   {(item.syncStatus !== 'PENDIENTE' || item.lifecycleStatus === 'CERRADA') && (
                     <Badge
                       text={item.syncStatus}
@@ -193,10 +228,49 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 12,
   },
+  demoBanner: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  demoCopy: {
+    flex: 1,
+  },
+  demoTitle: {
+    color: '#422006',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 12,
+  },
+  demoText: {
+    color: '#7C2D12',
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    marginTop: 2,
+  },
+  demoReset: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  demoResetText: {
+    color: '#7C2D12',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 11,
+  },
   listContent: {
     padding: 16,
     gap: 12,
     paddingBottom: 100,
+    width: '100%',
+    maxWidth: 760,
+    alignSelf: 'center',
   },
   visitCard: {
     padding: 16,

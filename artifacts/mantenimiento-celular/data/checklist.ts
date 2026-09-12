@@ -50,30 +50,6 @@ export const CHECKLIST_SHEETS: readonly ChecklistSheetDefinition[] = [
     title: 'Transmisión',
     points: ['Alineación de antenas', 'Cables ODU/IDU'],
   },
-  {
-    id: 's7',
-    name: 'RADIOFRECUENCIA',
-    title: 'Radiofrecuencia',
-    points: ['Estado de antenas', 'Conectores y jumpers', 'Etiquetado de sectores'],
-  },
-  {
-    id: 's8',
-    name: 'ENERGIA SOLAR',
-    title: 'Energía solar',
-    points: ['Paneles solares', 'Controlador solar', 'Cableado solar'],
-  },
-  {
-    id: 's9',
-    name: 'SISTEMA DE SEGURIDAD',
-    title: 'Sistema de seguridad',
-    points: ['CCTV y grabador', 'Control de acceso', 'Extintores y señalización'],
-  },
-  {
-    id: 's10',
-    name: 'OBRA CIVIL',
-    title: 'Obra civil',
-    points: ['Losa y drenajes', 'Canalizaciones', 'Limpieza del sitio'],
-  },
 ] as const;
 
 export const CHECKLIST_SHEET_NAMES = CHECKLIST_SHEETS.map((sheet) => sheet.name);
