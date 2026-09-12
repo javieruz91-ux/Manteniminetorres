@@ -11,7 +11,7 @@ export const EXPECTED_SHEETS = [
   ["PLANTA HUAWEI", 20, 70],
   ["INFRAESTRUCTURA", 13, 278],
   ["ELECTROMECANICA", 13, 141],
-  ["TIERRAS", 12, 80],
+  ["TIERRAS", 12, 81],
   ["TRANSMISION", 11, 32],
   ["HOJA DE SEG", 8, 42],
   ["REPORTE FOTOGRAFICO", 13, 211],
@@ -548,8 +548,8 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
     const entry = entries.find((item) => item.name === sheet.path);
     if (!entry) continue;
     const values = new Map<string, string>();
-    for (const cell of xmlData(entry).matchAll(/<c\b([^>]*?)>([\s\S]*?)<\/c>|<c\b([^>]*?)\/>/g)) {
-      const head = cell[1] ?? cell[3] ?? ""; const body = cell[2] ?? "";
+    for (const cell of xmlData(entry).matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+      const head = cell[1] ?? ""; const body = cell[2] ?? "";
       const ref = attr(head, "r"); if (!ref) continue;
       const type = attr(head, "t") ?? ""; const raw = textNodes(body, "v")[0] ?? textNodes(body, "t").join("");
       values.set(ref, type === "s" ? (sharedStrings[Number(raw)] ?? "") : unescapeXml(raw));
@@ -575,7 +575,7 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
   if (styles) {
     const styleXml = xmlData(styles);
     const cellXfs = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/i.exec(styleXml)?.[1] ?? "";
-    const xfs = cellXfs.match(/<xf\b[^>]*(?:\/>|>[\s\S]*?<\/xf>)/g) ?? [];
+    const xfs = cellXfs.match(/<xf\b[^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g) ?? [];
     xfs.forEach((xf, i) => { if (/<protection\b[^>]*locked="0"/i.test(xf)) unlocked.add(i); });
   }
   const catalog: TemplateField[] = [];
@@ -591,8 +591,8 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
     const validations = [...xml.matchAll(/<dataValidation\b([^>]*)>([\s\S]*?)<\/dataValidation>/gi)]
       .map((m) => ({ ranges: (attr(m[1], "sqref") ?? "").split(/\s+/), formula: textNodes(m[2], "formula1")[0] ?? "" }));
     const cellMap = new Map<string, { xml: string; value: string; style: number; type: string }>();
-    for (const m of xml.matchAll(/<c\b([^>]*?)>([\s\S]*?)<\/c>|<c\b([^>]*?)\/>/g)) {
-      const head = m[1] ?? m[3] ?? ""; const body = m[2] ?? "";
+    for (const m of xml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+      const head = m[1] ?? ""; const body = m[2] ?? "";
       const ref = attr(head, "r"); if (!ref) continue;
       const type = attr(head, "t") ?? ""; const style = Number(attr(head, "s") ?? -1);
       const raw = textNodes(body, "v")[0] ?? textNodes(body, "t").join("");
@@ -614,13 +614,28 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
       const row = Number(ref.replace(/\D/g, "")); const col = colNumber(ref);
       const adjacent = [cellMap.get(cellRef(row, col - 1))?.value, cellMap.get(cellRef(row, col + 1))?.value,
         cellMap.get(cellRef(row - 1, col))?.value, cellMap.get(cellRef(row + 1, col))?.value].filter(Boolean) as string[];
-      const label = adjacent.find((v) => v.trim().length > 2) ?? "";
+      const horizontalContext = [...Array(8)].map((_, offset) => [
+        col - offset - 1 > 0 ? cellMap.get(cellRef(row, col - offset - 1))?.value : undefined,
+        cellMap.get(cellRef(row, col + offset + 1))?.value,
+      ]).flat().find((value): value is string => Boolean(value && value.trim().length > 2)) ?? "";
+      const verticalContext = [...Array(8)].map((_, offset) =>
+        row - offset - 1 > 0 ? cellMap.get(cellRef(row - offset - 1, col))?.value : undefined,
+      ).find((value): value is string => Boolean(value && value.trim().length > 2)) ?? "";
+      const directLabel = adjacent.find((v) => v.trim().length > 2) ?? "";
+      const contextualLabel = !directLabel && (validation ? (horizontalContext || verticalContext) : horizontalContext && verticalContext)
+        ? validation ? (horizontalContext || verticalContext) : `${horizontalContext} / ${verticalContext}` : "";
+      const label = directLabel || contextualLabel;
       const hasFormula = /<f\b/i.test(cell.xml);
       const candidate = !hasFormula && (unlocked.has(cell.style) || Boolean(validation) ||
         (cell.value.length === 0 && cell.style >= 0 && Boolean(label)));
+      const evidenceContext = `${label} ${horizontalContext} ${verticalContext}`.toUpperCase();
+      const rowHasContent = [...cellMap].some(([candidateRef, candidateCell]) =>
+        candidateRef !== ref && Number(candidateRef.replace(/\D/g, "")) === row && Boolean(candidateCell.value.trim()));
+      if (!cell.value.trim() && !validation && !directLabel && !contextualLabel && !rowHasContent) continue;
+      if (!cell.value.trim() && /FOTOGRAF|OBSERVACION/.test(evidenceContext) && !isMerged(ref)) continue;
       if (!candidate || isMerged(ref)) continue;
       const listedOptions = validation ? validationOptions(validation.formula) : [];
-      const combined = `${label} ${cell.value}`.toUpperCase();
+      const combined = `${label} ${horizontalContext} ${verticalContext} ${cell.value}`.toUpperCase();
       const responseType: ResponseType = /OK\/?NOK|SC\b|N\/A|ESTADO|STATUS/.test(combined) ? "status"
         : /FECHA|DATE/.test(combined) ? "date" : /MEDI|VOLTAJE|AMPER|TEMP|PRESI|DISTANC|%/.test(combined) ? "measurement"
         : /OBSERV|COMENT|DESCRIP/.test(combined) ? "observation" : /NÚM|NUM|CANT|VALOR/.test(combined) ? "number"
@@ -638,6 +653,54 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
           applicability: validation ? "validated" : "general", evidenceSlot, target: `${sheet.name}!${ref}`,
           sourceEvidence: `Etiqueta adyacente: ${label}${validation ? `; validación: ${validation.formula}` : ""}`, confidence,
           state: "mapped", ignoreReason: null });
+      }
+    }
+    if (sheet.name !== "REPORTE FOTOGRAFICO") {
+      for (const [ref, cell] of cellMap) {
+        if (!/FOTOGRAF|IMAGEN|EVIDENCIA/i.test(cell.value.trim())) continue;
+        const row = Number(ref.replace(/\D/g, "")); const col = colNumber(ref);
+        const targetRef = cellMap.has(cellRef(row, col - 1)) ? cellRef(row, col - 1) : ref;
+        const id = `${sheet.name}:photo:${ref}`;
+        if (catalog.some((field) => field.id === id)) continue;
+        catalog.push({
+          id, sheet: sheet.name, subsection: "", key: cell.value.trim(), label: cell.value.trim(),
+          responseType: "text", options: [], required: false, applicability: "evidence.photo",
+          evidenceSlot: "photo", target: `${sheet.name}!${targetRef}`,
+          sourceEvidence: `Etiqueta explícita de fotografía en ${sheet.name}!${ref}`,
+          confidence: 0.99, state: "mapped", ignoreReason: null,
+        });
+      }
+    }
+    if (sheet.name === "REPORTE FOTOGRAFICO") {
+      const mergedTarget = (ref: string): string => {
+        const [column] = ref.match(/[A-Z]+/i) ?? [ref];
+        const row = Number(ref.replace(/\D/g, ""));
+        const following = merged
+          .map((range) => ({ range, start: range.split(":")[0] }))
+          .filter(({ start }) => start.match(/[A-Z]+/i)?.[0].toUpperCase() === column.toUpperCase() &&
+            Number(start.replace(/\D/g, "")) > row)
+          .sort((a, b) => Number(a.start.replace(/\D/g, "")) - Number(b.start.replace(/\D/g, "")))[0];
+        return following?.range ??
+          merged.find((range) => range.split(":")[0].toUpperCase() === ref.toUpperCase()) ?? ref;
+      };
+      for (const [ref, cell] of cellMap) {
+        const normalized = cell.value.trim().toUpperCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+        const isPhotoLabel = /^FOTOGRAFIA\s+\d+/.test(normalized);
+        const isObservationLabel = normalized === "OBSERVACIONES:";
+        if (!isPhotoLabel && !isObservationLabel) continue;
+        const targetRef = mergedTarget(ref);
+        const id = `${sheet.name}:${ref}`;
+        if (catalog.some((field) => field.id === id)) continue;
+        const evidenceSlot: TemplateField["evidenceSlot"] = isPhotoLabel ? "photo" : "observation";
+        const responseType: ResponseType = isPhotoLabel ? "text" : "observation";
+        catalog.push({
+          id, sheet: sheet.name, subsection: `página ${Math.floor((Number(ref.replace(/\D/g, "")) - 1) / 52) + 1}`,
+          key: cell.value.trim(), label: cell.value.trim(), responseType, options: [], required: false,
+          applicability: isPhotoLabel ? "evidence.photo" : "evidence.observation",
+          evidenceSlot, target: `${sheet.name}!${targetRef}`,
+          sourceEvidence: `Etiqueta explícita de plantilla en ${sheet.name}!${ref}; rango ${targetRef}`,
+          confidence: 0.99, state: "mapped", ignoreReason: null,
+        });
       }
     }
     if (sheet.name === "REPORTE FOTOGRAFICO" && !catalog.some((field) => field.sheet === sheet.name && field.evidenceSlot === "photo") &&
@@ -662,7 +725,7 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
 
 function replaceCellValue(xml: string, ref: string, value: unknown): string {
   const escaped = escapeXml(String(value ?? ""));
-  const pattern = new RegExp(`(<c\\b[^>]*\\br="${ref}"[^>]*>)([\\s\\S]*?)(</c>)`, "i");
+  const pattern = new RegExp(`(<c\\b(?![^>]*\\/\\s*>)[^>]*\\br="${ref}"[^>]*>)([\\s\\S]*?)(</c>)`, "i");
   const replaced = xml.replace(pattern, (_, open: string, body: string, close: string) => {
     const cleaned = body.replace(/<v>[\s\S]*?<\/v>/i, "").replace(/<is>[\s\S]*?<\/is>/i, "");
     const isString = typeof value !== "number" && typeof value !== "bigint";
@@ -828,9 +891,9 @@ function readTargetValue(bytes: Buffer, target: string): string | undefined {
   const path = workbookSheets(parsed.entries).find((item) => item.name === sheet)?.path;
   const entry = parsed.entries.find((item) => item.name === path);
   if (!entry) return undefined;
-  const match = new RegExp(`<c\\b([^>]*\\br="${ref}"[^>]*)>([\\s\\S]*?)</c>|<c\\b([^>]*\\br="${ref}"[^>]*)/>`, "i").exec(xmlData(entry));
+  const match = new RegExp(`<c\\b([^>]*\\br="${ref}"[^>]*?)(?:\\/>|>([\\s\\S]*?)</c>)`, "i").exec(xmlData(entry));
   if (!match) return undefined;
-  const head = match[1] ?? match[3] ?? "";
+  const head = match[1] ?? "";
   const body = match[2] ?? "";
   const type = attr(head, "t");
   const raw = textNodes(body, type === "inlineStr" ? "t" : "v")[0] ?? "";

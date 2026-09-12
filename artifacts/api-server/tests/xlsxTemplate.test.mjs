@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { deflateRawSync } from "node:zlib";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const dir = mkdtempSync(join(tmpdir(), "xlsx-template-test-"));
 const bundle = join(dir, "xlsxTemplate.mjs");
@@ -21,16 +22,29 @@ const {
   verifyTemplate,
 } = await import(bundle);
 
-// This is the recovered structural export of the official workbook contract.
-// Keep it explicit so a future change cannot silently alter sheet names/order
-// while the original binary is still unavailable in the workspace.
+const officialWorkbook = fileURLToPath(new URL("../../../attached_assets/Mantenimiento_Preventivo_a_Sitios_Celulares_REV2_(1)_1789252951099.xlsx", import.meta.url));
+const officialFixture = readFileSync(officialWorkbook);
+const officialCatalog = parseTemplate(officialFixture);
+assert.equal(officialCatalog.ready, false);
+assert.equal(officialCatalog.unmapped.some((candidate) => candidate.target === "PLANTA HUAWEI!D8"), false);
+assert.ok(officialCatalog.catalog.some((field) => field.sheet === "PLANTA HUAWEI" && field.target === "PLANTA HUAWEI!D8" && field.responseType === "status"));
+assert.ok(officialCatalog.catalog.some((field) => field.sheet === "HOJA DE SEG"));
+assert.ok(officialCatalog.catalog.some((field) => field.sheet === "INFRAESTRUCTURA" && field.target === "INFRAESTRUCTURA!D15"));
+assert.equal(officialCatalog.catalog.filter((field) => field.sheet === "REPORTE FOTOGRAFICO" && field.evidenceSlot === "photo").length, 16);
+assert.ok(officialCatalog.catalog.some((field) => field.target === "REPORTE FOTOGRAFICO!A10:F27" && field.evidenceSlot === "photo"));
+assert.ok(officialCatalog.catalog.some((field) => field.target === "REPORTE FOTOGRAFICO!A30:F31" && field.evidenceSlot === "observation"));
+assert.equal(officialCatalog.unmapped.some((candidate) => candidate.target === "REPORTE FOTOGRAFICO!__evidence__"), false);
+assert.deepEqual(officialCatalog.unmapped.map((candidate) => candidate.target), ["INFRAESTRUCTURA!D20"]);
+
+// Structural contract confirmed against the owner-provided workbook fixture.
+// Keep it explicit so a future change cannot silently alter sheet names/order.
 assert.deepEqual(EXPECTED_SHEETS, [
   ["PRESENTACION", 8, 24],
   ["(HW) ALARMAS DE FUERZA", 10, 81],
   ["PLANTA HUAWEI", 20, 70],
   ["INFRAESTRUCTURA", 13, 278],
   ["ELECTROMECANICA", 13, 141],
-  ["TIERRAS", 12, 80],
+  ["TIERRAS", 12, 81],
   ["TRANSMISION", 11, 32],
   ["HOJA DE SEG", 8, 42],
   ["REPORTE FOTOGRAFICO", 13, 211],
