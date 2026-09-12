@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "o0i7AHBuT0GFNRr6obGNF"
+uri = "file://test-evidence/mobile-startup-final.jpg"
+type = "image"
+title = "Evidencia de arranque móvil"
+description = "Captura obtenida de la vista previa Expo durante la auditoría, con la pantalla inicial renderizada y el estado de red visible."
+logical_id = "d0d84049-f6b0-445a-a8d5-bf37678099e6"
+content_hash = "sha256:60aeb69ef4d27d3060deb7f0654750d34f5174f3e1e6f009f87bcad316e5229f"
+size = 18261
+mtime_ms = 1789247814648
+storage_uri = "gcs://replit-rams-assets-worf/rams/assets/repl:9d8620bd-4178-4ac6-ade5-e1d53a2641c4/d0d84049-f6b0-445a-a8d5-bf37678099e6/55c5f9bf-e321-4f9a-a487-4b34e21eccab"
+storage_version_token = "1789247884951865"
+content_type = "image/jpeg"
