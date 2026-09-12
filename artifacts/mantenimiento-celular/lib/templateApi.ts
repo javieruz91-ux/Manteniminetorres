@@ -245,4 +245,14 @@ export async function exportTemplate(
   };
 }
 
+export async function exportBlankTemplate(): Promise<TemplateExportResult> {
+  const result = await request<TemplateExportResult & { contentBase64?: string }>(
+    '/api/templates/blank',
+  );
+  return {
+    ...result,
+    base64: result.base64 || result.contentBase64 || '',
+  };
+}
+
 export { MIME_XLSX };

@@ -17,6 +17,8 @@ export const EXPECTED_SHEETS = [
   ["REPORTE FOTOGRAFICO", 13, 211],
   ["base", 1, 1],
 ] as const;
+export const PHOTO_SLOT_COUNT = 16;
+const PHOTO_SLOT_START_ROW = 3;
 
 export type ResponseType =
   | "text" | "number" | "date" | "selection" | "measurement" | "observation" | "status";
@@ -680,6 +682,67 @@ function replaceCellValue(xml: string, ref: string, value: unknown): string {
     const valueXml = isString ? `<is><t>${escaped}</t></is>` : `<v>${escaped}</v>`;
     return `<c${normalizedAttributes}>${valueXml}</c>`;
   });
+}
+
+function addBlankPhotoSlot(xml: string, row: number, label: string): string {
+  const ref = `A${row}`;
+  const withExistingCell = replaceCellValue(xml, ref, label);
+  if (withExistingCell !== xml) return withExistingCell;
+
+  const cell = `<c r="${ref}" t="inlineStr"><is><t>${escapeXml(label)}</t></is></c>`;
+  const rowPattern = new RegExp(`<row\\b([^>]*\\br="${row}"[^>]*)(?:/>|>([\\s\\S]*?)</row\\s*>)`, "i");
+  const existingRow = rowPattern.exec(xml);
+  if (existingRow) {
+    const rowXml = existingRow[0].endsWith("/>")
+      ? existingRow[0].replace(/\/>$/, `>${cell}</row>`)
+      : existingRow[0].replace(/<\/row\s*>$/i, `${cell}</row>`);
+    return xml.replace(existingRow[0], rowXml);
+  }
+
+  const sheetDataClose = xml.indexOf("</sheetData>");
+  if (sheetDataClose < 0) throw new Error("REPORTE FOTOGRAFICO carece de sheetData");
+  return `${xml.slice(0, sheetDataClose)}<row r="${row}">${cell}</row>${xml.slice(sheetDataClose)}`;
+}
+
+/**
+ * Creates the shareable workbook template without applying a visit snapshot.
+ * The source workbook remains the source of truth; only the 16 empty photo
+ * spaces are numbered in the exported copy.
+ */
+export function prepareBlankTemplate(bytes: Buffer): {
+  bytes: Buffer;
+  verification: TemplateVerification;
+  photoSlots: string[];
+} {
+  const parsed = zipEntries(bytes);
+  const sheets = validateWorkbookStructure(parsed.entries);
+  const photoSheet = workbookSheets(parsed.entries).find((sheet) => sheet.name === "REPORTE FOTOGRAFICO");
+  if (!photoSheet) throw new Error("Falta REPORTE FOTOGRAFICO");
+  const worksheet = parsed.entries.find((entry) => entry.name === photoSheet.path);
+  if (!worksheet) throw new Error("Falta XML de REPORTE FOTOGRAFICO");
+
+  let xml = xmlData(worksheet);
+  const photoSlots = Array.from({ length: PHOTO_SLOT_COUNT }, (_, index) => {
+    const row = PHOTO_SLOT_START_ROW + index;
+    xml = addBlankPhotoSlot(xml, row, `ESPACIO ${index + 1}`);
+    return `REPORTE FOTOGRAFICO!A${row}`;
+  });
+  updateEntryData(worksheet, Buffer.from(xml));
+  const output = zipXml(parsed.entries, parsed.comment);
+  const verification: TemplateVerification = {
+    valid: photoSlots.every((target, index) => {
+      const row = PHOTO_SLOT_START_ROW + index;
+      return new RegExp(`<c\\b[^>]*\\br="A${row}"[^>]*>[\\s\\S]*?ESPACIO ${index + 1}[\\s\\S]*?</c>`, "i").test(xml);
+    }),
+    sheets,
+    writtenTargets: photoSlots,
+    details: [
+      "Diez hojas y dimensiones verificadas",
+      `${PHOTO_SLOT_COUNT} espacios fotográficos vacíos reservados y numerados`,
+    ],
+  };
+  if (!verification.valid) throw new Error("No se pudieron reservar los espacios fotográficos de la plantilla");
+  return { bytes: output, verification, photoSlots };
 }
 function topLeftRef(ref: string): string {
   return ref.split(":")[0].trim();

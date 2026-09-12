@@ -15,6 +15,7 @@ import {
   convertXlsxToPdf,
   embedEvidence,
   parseTemplate,
+  prepareBlankTemplate,
   patchTemplate,
   sha256,
   verifyTemplate,
@@ -274,6 +275,35 @@ router.post("/templates/export", async (req, res) => {
     }));
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "No se pudo exportar la plantilla original" });
+  }
+});
+
+router.get("/templates/blank", async (req, res) => {
+  if (!authenticated(req, res)) return;
+  const row = await current(req.user.id);
+  if (!row) {
+    res.status(404).json({ error: NOT_LOADED });
+    return;
+  }
+  if (!row.ready) {
+    res.status(400).json({ error: "La plantilla Excel original todavía tiene celdas sin auditar" });
+    return;
+  }
+
+  try {
+    const file = await objectStorage.getObjectEntityFile(row.originalObjectPath);
+    const [source] = await file.download();
+    const blank = prepareBlankTemplate(source);
+    res.json(ExportTemplateResponse.parse({
+      fileName: "plantilla_mantenimiento_vacia.xlsx",
+      contentBase64: blank.bytes.toString("base64"),
+      mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      verification: blank.verification,
+    }));
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : "No se pudo preparar la plantilla vacía",
+    });
   }
 });
 

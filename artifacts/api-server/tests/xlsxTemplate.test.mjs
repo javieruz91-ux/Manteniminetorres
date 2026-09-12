@@ -11,7 +11,15 @@ execFileSync("pnpm", ["exec", "esbuild", "src/lib/xlsxTemplate.ts", "--bundle", 
   cwd: new URL("..", import.meta.url).pathname,
   stdio: "inherit",
 });
-const { EXPECTED_SHEETS, embedEvidence, parseTemplate, patchTemplate, verifyTemplate } = await import(bundle);
+const {
+  EXPECTED_SHEETS,
+  PHOTO_SLOT_COUNT,
+  embedEvidence,
+  parseTemplate,
+  patchTemplate,
+  prepareBlankTemplate,
+  verifyTemplate,
+} = await import(bundle);
 
 // This is the recovered structural export of the official workbook contract.
 // Keep it explicit so a future change cannot silently alter sheet names/order
@@ -28,6 +36,7 @@ assert.deepEqual(EXPECTED_SHEETS, [
   ["REPORTE FOTOGRAFICO", 13, 211],
   ["base", 1, 1],
 ]);
+assert.equal(PHOTO_SLOT_COUNT, 16);
 
 function crc32(data) {
   let crc = 0xffffffff;
@@ -90,6 +99,19 @@ const source = zip([
   ["xl/styles.xml", styles],
   ...sheetEntries,
 ]);
+
+const blank = prepareBlankTemplate(source);
+assert.equal(blank.verification.valid, true);
+assert.equal(blank.verification.sheets.length, 10);
+assert.equal(blank.photoSlots.length, PHOTO_SLOT_COUNT);
+const blankZip = join(dir, "blank.xlsx");
+writeFileSync(blankZip, blank.bytes);
+const blankPhotoSheet = execFileSync("unzip", ["-p", blankZip, "xl/worksheets/sheet9.xml"], { encoding: "utf8" });
+for (let slot = 1; slot <= PHOTO_SLOT_COUNT; slot++) {
+  assert.equal(blankPhotoSheet.includes(`r="A${slot + 2}"`), true);
+  assert.equal(blankPhotoSheet.includes(`ESPACIO ${slot}`), true);
+}
+assert.equal(blankPhotoSheet.includes("photo-1"), false);
 
 const catalog = parseTemplate(source);
 assert.equal(catalog.catalog.length > 0, true);

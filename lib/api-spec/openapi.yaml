@@ -333,6 +333,24 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+  /templates/blank:
+    get:
+      tags: [Templates]
+      operationId: exportBlankTemplate
+      summary: Download the audited original workbook as an empty template
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Empty XLSX workbook with the original ten-sheet layout.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplateExportResponse" }
+        "400":
+          description: Template is not ready for export.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
   /storage/uploads/request-url:
     post:
       tags: [Storage]

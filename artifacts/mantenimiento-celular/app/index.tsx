@@ -12,6 +12,8 @@ import { useTemplate } from '@/context/TemplateContext';
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getVisitConvenienceFields } from '@/utils/maintenanceRules';
+import { saveAndShareTemplateExport } from '@/utils/templateExport';
+import { exportBlankTemplate } from '@/lib/templateApi';
 
 export default function DashboardScreen() {
   const { visits, createVisit, isOnline, isDemoMode, resetDemoData } = useVisits();
@@ -20,6 +22,7 @@ export default function DashboardScreen() {
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const [isDownloadingTemplate, setIsDownloadingTemplate] = React.useState(false);
 
   const handleStartVisit = async () => {
     try {
@@ -37,6 +40,32 @@ export default function DashboardScreen() {
       router.push(`/visit/${id}`);
     } catch (error) {
       Alert.alert('No se pudo reiniciar', error instanceof Error ? error.message : 'Error desconocido');
+    }
+  };
+
+  const handleDownloadBlankTemplate = async () => {
+    if (!isAuthenticated) {
+      Alert.alert(
+        'Iniciar sesión requerido',
+        'Inicia sesión para descargar la plantilla Excel original de tu organización.',
+        [{ text: 'Cancelar', style: 'cancel' }, { text: 'Iniciar sesión', onPress: login }],
+      );
+      return;
+    }
+    try {
+      setIsDownloadingTemplate(true);
+      const result = await exportBlankTemplate();
+      if (result.verification?.verified === false || result.verification?.valid === false) {
+        throw new Error('La verificación de la plantilla falló.');
+      }
+      await saveAndShareTemplateExport(result);
+    } catch (error) {
+      Alert.alert(
+        'No se pudo descargar',
+        error instanceof Error ? error.message : 'No se pudo descargar la plantilla Excel.',
+      );
+    } finally {
+      setIsDownloadingTemplate(false);
     }
   };
 
@@ -206,6 +235,15 @@ export default function DashboardScreen() {
       />
 
       <View style={[styles.footer, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: Math.max(insets.bottom, 16) }]}>
+        <Button
+          testID="btn-download-empty-template"
+          title="Descargar plantilla Excel vacía"
+          variant="outline"
+          icon={<Feather name="download" size={17} color={colors.foreground} />}
+          onPress={() => void handleDownloadBlankTemplate()}
+          loading={isDownloadingTemplate}
+          disabled={isDownloadingTemplate}
+        />
         <Button
           title="Configuración de plantilla"
           variant="ghost"
