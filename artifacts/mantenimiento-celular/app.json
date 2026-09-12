@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "Mantenimiento Celular",
+    "slug": "mantenimiento-celular",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "mantenimiento-celular",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F172A"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "La aplicación requiere acceso a la cámara para documentar los hallazgos y evidencia de mantenimiento.",
+        "NSPhotoLibraryUsageDescription": "La aplicación requiere acceso a la galería para adjuntar fotos a los reportes de mantenimiento."
+      }
+    },
+    "android": {
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/images/icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "La aplicación requiere acceso a la galería para adjuntar fotos a los reportes de mantenimiento.",
+          "cameraPermission": "La aplicación requiere acceso a la cámara para documentar los hallazgos."
+        }
+      ],
+      "expo-sharing"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

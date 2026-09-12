@@ -1,0 +1,24 @@
+kind = "mobile"
+previewPath = "/"
+title = "Mantenimiento Celular"
+description = "Aplicación móvil en español para que técnicos registren mantenimientos preventivos de sitios celulares, completen listas de verificación y documenten hallazgos con fotografías incluso sin conexión."
+version = "1.0.0"
+id = "artifacts/mantenimiento-celular"
+router = "expo-domain"
+
+[[services]]
+name = "expo"
+ensurePreviewReachable = "/status"
+paths = [ "/" ]
+localPort = 18540
+
+[services.development]
+run = "pnpm --filter @workspace/mantenimiento-celular run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/mantenimiento-celular", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/mantenimiento-celular", "run", "serve" ]
+
+[services.env]
+PORT = "18540"
+BASE_PATH = "/"
