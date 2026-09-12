@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useVisits } from '@/context/VisitContext';
 import { useColors } from '@/hooks/useColors';
@@ -34,9 +34,11 @@ export default function VisitDetailScreen() {
     }
   }, [visit]);
 
-  const saveGeneralData = () => {
-    if (!id) return;
-    updateVisit(id, { siteId, siteName, workOrder, technician });
+  const saveGeneralData = async () => {
+    if (!id || !visit) return;
+    if (visit.lifecycleStatus === 'CERRADA') return;
+    
+    await updateVisit(id, { siteId, siteName, workOrder, technician });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
@@ -52,18 +54,24 @@ export default function VisitDetailScreen() {
   const totalSections = visit.sections.length;
   const progress = totalSections > 0 ? completedSections / totalSections : 0;
 
+  const isReadOnly = visit.lifecycleStatus === 'CERRADA';
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <KeyboardAwareScrollViewCompat contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) }}>
         <View style={styles.content}>
           <Card style={styles.card}>
             <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Datos Generales</Text>
+            {isReadOnly && (
+               <Text style={[styles.readOnlyText, { color: colors.warning }]}>Visita Cerrada - Solo Lectura</Text>
+            )}
             <Input 
               label="ID del Sitio" 
               value={siteId} 
               onChangeText={setSiteId} 
               onBlur={saveGeneralData}
               placeholder="Ej. BOG001"
+              editable={!isReadOnly}
             />
             <Input 
               label="Nombre del Sitio" 
@@ -71,6 +79,7 @@ export default function VisitDetailScreen() {
               onChangeText={setSiteName} 
               onBlur={saveGeneralData}
               placeholder="Ej. Las Lomas"
+              editable={!isReadOnly}
             />
             <Input 
               label="Orden de Trabajo" 
@@ -78,6 +87,7 @@ export default function VisitDetailScreen() {
               onChangeText={setWorkOrder} 
               onBlur={saveGeneralData}
               placeholder="Ej. OT-2023-10-15"
+              editable={!isReadOnly}
             />
             <Input 
               label="Técnico Responsable" 
@@ -85,6 +95,7 @@ export default function VisitDetailScreen() {
               onChangeText={setTechnician} 
               onBlur={saveGeneralData}
               placeholder="Ej. Juan Pérez"
+              editable={!isReadOnly}
             />
           </Card>
 
@@ -131,7 +142,7 @@ export default function VisitDetailScreen() {
               onPress={() => router.push(`/visit/${visit.id}/findings`)}
             />
             <Button
-              title="Resumen"
+              title="Resumen y Cierre"
               variant="primary"
               style={styles.halfBtn}
               icon={<Feather name="file-text" size={18} color="#FFF" />}
@@ -156,6 +167,11 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: 'Inter_700Bold',
     marginBottom: 16,
+  },
+  readOnlyText: {
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    marginBottom: 12,
   },
   progressHeader: {
     flexDirection: 'row',

@@ -2,21 +2,24 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import * as ImagePicker from 'expo-image-picker';
-import { Photo } from '@/types';
+import { Photo, PhotoType } from '@/types';
 import { Feather } from '@expo/vector-icons';
+import * as Crypto from 'expo-crypto';
 
 interface PhotoPickerProps {
   photos: Photo[];
   onAdd: (photo: Photo) => void;
   onRemove: (id: string) => void;
-  type: 'ANTES' | 'DESPUES' | 'GENERAL';
+  type: PhotoType;
   label: string;
+  disabled?: boolean;
 }
 
-export function PhotoPicker({ photos, onAdd, onRemove, type, label }: PhotoPickerProps) {
+export function PhotoPicker({ photos, onAdd, onRemove, type, label, disabled = false }: PhotoPickerProps) {
   const colors = useColors();
 
   const handlePick = async () => {
+    if (disabled) return;
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
       alert('Se requiere acceso a la cámara.');
@@ -30,10 +33,12 @@ export function PhotoPicker({ photos, onAdd, onRemove, type, label }: PhotoPicke
 
     if (!result.canceled && result.assets[0]) {
       onAdd({
-        id: Date.now().toString(),
+        id: Crypto.randomUUID(),
         uri: result.assets[0].uri,
         type,
         timestamp: Date.now(),
+        objectPath: null,
+        uploadStatus: 'pending'
       });
     }
   };
@@ -47,21 +52,30 @@ export function PhotoPicker({ photos, onAdd, onRemove, type, label }: PhotoPicke
         {typePhotos.map(photo => (
           <View key={photo.id} style={styles.photoContainer}>
             <Image source={{ uri: photo.uri }} style={[styles.photo, { borderColor: colors.border }]} />
-            <TouchableOpacity
-              style={styles.removeBtn}
-              onPress={() => onRemove(photo.id)}
-            >
-              <Feather name="x" size={12} color="#FFF" />
-            </TouchableOpacity>
+            {!disabled && (
+              <TouchableOpacity
+                style={styles.removeBtn}
+                onPress={() => onRemove(photo.id)}
+              >
+                <Feather name="x" size={12} color="#FFF" />
+              </TouchableOpacity>
+            )}
+            {photo.uploadStatus === 'failed' && (
+              <View style={styles.errorOverlay}>
+                <Feather name="alert-circle" size={24} color="#FFF" />
+              </View>
+            )}
           </View>
         ))}
-        <TouchableOpacity
-          style={[styles.addBtn, { backgroundColor: colors.muted, borderColor: colors.border }]}
-          onPress={handlePick}
-        >
-          <Feather name="camera" size={24} color={colors.mutedForeground} />
-          <Text style={[styles.addText, { color: colors.mutedForeground }]}>Añadir</Text>
-        </TouchableOpacity>
+        {!disabled && (
+          <TouchableOpacity
+            style={[styles.addBtn, { backgroundColor: colors.muted, borderColor: colors.border }]}
+            onPress={handlePick}
+          >
+            <Feather name="camera" size={24} color={colors.mutedForeground} />
+            <Text style={[styles.addText, { color: colors.mutedForeground }]}>Añadir</Text>
+          </TouchableOpacity>
+        )}
       </ScrollView>
     </View>
   );
@@ -112,5 +126,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: 'Inter_500Medium',
     marginTop: 4,
+  },
+  errorOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(239, 68, 68, 0.5)',
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   }
 });

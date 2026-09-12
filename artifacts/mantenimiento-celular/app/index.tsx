@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
 import { useVisits } from '@/context/VisitContext';
+import { useAuth } from '@/lib/auth';
 import { useColors } from '@/hooks/useColors';
 import { Feather } from '@expo/vector-icons';
 import { Button } from '@/components/Button';
@@ -11,7 +12,8 @@ import { Badge } from '@/components/Badge';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function DashboardScreen() {
-  const { visits, isLoading, createVisit } = useVisits();
+  const { visits, isLoading: visitsLoading, createVisit, isOnline } = useVisits();
+  const { user, login, logout, isAuthenticated } = useAuth();
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -21,21 +23,23 @@ export default function DashboardScreen() {
     router.push(`/visit/${id}`);
   };
 
-  const getStatusColor = (status: string) => {
+  const getLifecycleColor = (status: string) => {
     switch (status) {
-      case 'BORRADOR': return colors.warning;
-      case 'LISTO_PARA_SINCRONIZAR': return colors.primary;
-      case 'SINCRONIZADO': return colors.success;
+      case 'BORRADOR': return colors.muted;
+      case 'ABIERTA': return colors.primary;
+      case 'CERRADA': return colors.success;
+      case 'REABIERTA': return colors.warning;
       default: return colors.muted;
     }
   };
 
-  const getStatusLabel = (status: string) => {
+  const getSyncColor = (status: string) => {
     switch (status) {
-      case 'BORRADOR': return 'BORRADOR';
-      case 'LISTO_PARA_SINCRONIZAR': return 'POR SINCRONIZAR';
-      case 'SINCRONIZADO': return 'COMPLETADO';
-      default: return status;
+      case 'PENDIENTE': return colors.warning;
+      case 'SINCRONIZANDO': return colors.primary;
+      case 'SINCRONIZADO': return colors.success;
+      case 'ERROR': return colors.destructive;
+      default: return colors.muted;
     }
   };
 
@@ -57,11 +61,28 @@ export default function DashboardScreen() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.headerStatus, { backgroundColor: colors.header }]}>
         <View style={styles.statusRow}>
-          <Feather name="wifi" size={16} color={colors.success} />
-          <Text style={[styles.statusText, { color: colors.headerForeground }]}>En línea</Text>
+          <Feather name={isOnline ? "wifi" : "wifi-off"} size={16} color={isOnline ? colors.success : colors.warning} />
+          <Text style={[styles.statusText, { color: colors.headerForeground }]}>
+            {isOnline ? 'En línea' : 'Desconectado'}
+          </Text>
         </View>
-        <Text style={[styles.syncText, { color: colors.mutedForeground }]}>
-          {visits.filter(v => v.status === 'LISTO_PARA_SINCRONIZAR').length} pendientes de envío
+        
+        {isAuthenticated ? (
+           <TouchableOpacity onPress={logout} style={styles.authBtn}>
+             <Feather name="log-out" size={14} color={colors.headerForeground} />
+             <Text style={[styles.authText, { color: colors.headerForeground }]}>Salir</Text>
+           </TouchableOpacity>
+        ) : (
+           <TouchableOpacity onPress={login} style={styles.authBtn}>
+             <Feather name="log-in" size={14} color={colors.headerForeground} />
+             <Text style={[styles.authText, { color: colors.headerForeground }]}>Iniciar Sesión</Text>
+           </TouchableOpacity>
+        )}
+      </View>
+      
+      <View style={[styles.syncBar, { backgroundColor: colors.muted }]}>
+         <Text style={[styles.syncText, { color: colors.foreground }]}>
+          {visits.filter(v => v.syncStatus === 'PENDIENTE' || v.syncStatus === 'ERROR' || v.syncStatus === 'SINCRONIZANDO').length} pendientes de envío
         </Text>
       </View>
 
@@ -77,13 +98,24 @@ export default function DashboardScreen() {
                 <Text style={[styles.siteName, { color: colors.foreground }]}>
                   {item.siteName || 'Sitio sin nombre'}
                 </Text>
-                <Badge
-                  text={getStatusLabel(item.status)}
-                  customColor={{
-                    bg: getStatusColor(item.status),
-                    text: '#FFF'
-                  }}
-                />
+                <View style={{ gap: 4, alignItems: 'flex-end' }}>
+                  <Badge
+                    text={item.lifecycleStatus}
+                    customColor={{
+                      bg: getLifecycleColor(item.lifecycleStatus),
+                      text: '#FFF'
+                    }}
+                  />
+                  {(item.syncStatus !== 'PENDIENTE' || item.lifecycleStatus === 'CERRADA') && (
+                    <Badge
+                      text={item.syncStatus}
+                      customColor={{
+                        bg: getSyncColor(item.syncStatus),
+                        text: '#FFF'
+                      }}
+                    />
+                  )}
+                </View>
               </View>
               
               <View style={styles.cardBody}>
@@ -96,7 +128,7 @@ export default function DashboardScreen() {
                 <View style={styles.infoRow}>
                   <Feather name="calendar" size={14} color={colors.mutedForeground} />
                   <Text style={[styles.infoText, { color: colors.mutedForeground }]}>
-                    {new Date(item.date).toLocaleDateString()}
+                    {new Date(item.visitDate).toLocaleDateString()}
                   </Text>
                 </View>
                 <View style={styles.infoRow}>
@@ -142,6 +174,20 @@ const styles = StyleSheet.create({
   statusText: {
     fontFamily: 'Inter_500Medium',
     fontSize: 14,
+  },
+  authBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    padding: 6,
+  },
+  authText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+  },
+  syncBar: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
   },
   syncText: {
     fontFamily: 'Inter_400Regular',

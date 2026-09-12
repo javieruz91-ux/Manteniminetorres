@@ -10,6 +10,12 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: Auth
+    description: Browser and mobile authentication endpoints.
+  - name: Maintenance
+    description: Offline-first cellular maintenance visit synchronization.
+  - name: Storage
+    description: Object storage upload and serving endpoints.
 paths:
   /healthz:
     get:
@@ -24,7 +30,342 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /auth/user:
+    get:
+      tags: [Auth]
+      operationId: getCurrentAuthUser
+      summary: Get the currently authenticated user
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationSessionHeader"
+        - $ref: "#/components/parameters/SessionCookie"
+      responses:
+        "200":
+          description: Auth status resolved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthUserEnvelope"
+  /login:
+    get:
+      tags: [Auth]
+      operationId: beginBrowserLogin
+      summary: Start the browser OIDC login flow
+      parameters:
+        - name: returnTo
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to the OIDC authorization endpoint.
+  /callback:
+    get:
+      tags: [Auth]
+      operationId: handleBrowserLoginCallback
+      summary: Complete the browser OIDC login flow
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: iss
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uri
+      responses:
+        "302":
+          description: Redirect to the return path.
+  /logout:
+    get:
+      tags: [Auth]
+      operationId: logoutBrowserSession
+      summary: Clear the session and begin OIDC logout
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationSessionHeader"
+        - $ref: "#/components/parameters/SessionCookie"
+        - name: returnTo
+          in: query
+          required: false
+          schema:
+            type: string
+            default: /
+      responses:
+        "302":
+          description: Redirect to the OIDC provider logout URL.
+  /mobile-auth/token-exchange:
+    post:
+      tags: [Auth]
+      operationId: exchangeMobileAuthorizationCode
+      summary: Exchange a mobile OIDC code for a session token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MobileTokenExchangeRequest"
+      responses:
+        "200":
+          description: Session created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MobileTokenExchangeSuccess"
+        "400":
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: Token did not contain usable claims.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: Token exchange failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /mobile-auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logoutMobileSession
+      summary: Delete a mobile session token
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationSessionHeader"
+      responses:
+        "200":
+          description: Logout processed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogoutSuccess"
+  /visits/sync:
+    post:
+      tags: [Maintenance]
+      operationId: syncVisit
+      summary: Idempotently synchronize a complete visit snapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VisitSyncInput"
+      responses:
+        "200":
+          description: Visit accepted and persisted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitSyncConfirmation"
+        "400":
+          description: Invalid visit snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: Stale or conflicting client version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /visits:
+    get:
+      tags: [Maintenance]
+      operationId: listVisits
+      summary: List all persisted visit snapshots for the authenticated owner
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Visit snapshots available to restore on a device.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitListResponse"
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /visits/{visitId}:
+    get:
+      tags: [Maintenance]
+      operationId: getVisit
+      summary: Read a persisted visit snapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: visitId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Visit snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitSnapshot"
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Visit not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /storage/uploads/request-url:
+    post:
+      tags: [Storage]
+      operationId: requestUploadUrl
+      summary: Request a presigned URL for an image upload
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadUrlRequest"
+      responses:
+        "200":
+          description: Presigned upload URL generated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadUrlResponse"
+        "400":
+          description: Invalid image metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "413":
+          description: Image is too large.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /storage/public-objects/{filePath}:
+    get:
+      tags: [Storage]
+      operationId: getPublicObject
+      summary: Serve a public asset
+      parameters:
+        - name: filePath
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Object content.
+          content:
+            "*/*":
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: File not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /storage/objects/{objectPath}:
+    get:
+      tags: [Storage]
+      operationId: getStorageObject
+      summary: Serve a private object entity
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: objectPath
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Object content.
+          content:
+            "*/*":
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: Object not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 components:
+  parameters:
+    AuthorizationSessionHeader:
+      name: Authorization
+      in: header
+      required: false
+      schema:
+        type: string
+    SessionCookie:
+      name: sid
+      in: cookie
+      required: false
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
   schemas:
     HealthStatus:
       type: object
@@ -33,4 +374,235 @@ components:
           type: string
       required:
         - status
+    AuthUser:
+      type: object
+      required: [id, email, firstName, lastName, profileImageUrl]
+      properties:
+        id:
+          type: string
+        email:
+          type: ["string", "null"]
+          format: email
+        firstName:
+          type: ["string", "null"]
+        lastName:
+          type: ["string", "null"]
+        profileImageUrl:
+          type: ["string", "null"]
+    AuthUserEnvelope:
+      type: object
+      required: [user]
+      properties:
+        user:
+          oneOf:
+            - $ref: "#/components/schemas/AuthUser"
+            - type: "null"
+    MobileTokenExchangeRequest:
+      type: object
+      required: [code, code_verifier, redirect_uri, state]
+      properties:
+        code:
+          type: string
+          minLength: 1
+        code_verifier:
+          type: string
+          minLength: 1
+        redirect_uri:
+          type: string
+          minLength: 1
+          format: uri
+        state:
+          type: string
+          minLength: 1
+        nonce:
+          type: string
+          minLength: 1
+    MobileTokenExchangeSuccess:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+    LogoutSuccess:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+          const: true
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    VisitPhoto:
+      type: object
+      required: [visitId, type, localId, objectPath, uploadStatus]
+      properties:
+        visitId: { type: string, minLength: 1 }
+        sectionId: { type: ["string", "null"] }
+        pointId: { type: ["string", "null"] }
+        findingId: { type: ["string", "null"] }
+        type: { type: string, minLength: 1 }
+        localId: { type: string, minLength: 1 }
+        objectPath: { type: ["string", "null"] }
+        uploadStatus:
+          type: string
+          enum: [pending, uploading, uploaded, failed]
+        contentType: { type: ["string", "null"] }
+        size: { type: ["integer", "null"], minimum: 1 }
+    VisitAuditEvent:
+      type: object
+      required: [id, eventType, occurredAt]
+      properties:
+        id: { type: string, minLength: 1 }
+        eventType: { type: string, minLength: 1 }
+        occurredAt: { type: string, format: date-time }
+        actorId: { type: ["string", "null"] }
+        metadata:
+          type: object
+          additionalProperties: true
+    VisitFinding:
+      type: object
+      required:
+        - id
+        - sectionId
+        - pointId
+        - description
+        - responsible
+        - priority
+        - startDate
+        - commitmentDate
+        - completedDate
+        - state
+      properties:
+        id: { type: string, minLength: 1 }
+        sectionId: { type: string, minLength: 1 }
+        pointId: { type: string, minLength: 1 }
+        description: { type: string }
+        responsible: { type: string }
+        priority:
+          type: string
+          enum: [BAJA, MEDIA, ALTA, CRITICA]
+        startDate: { type: string, format: date-time }
+        commitmentDate: { type: string, format: date-time }
+        completedDate: { type: ["string", "null"], format: date-time }
+        state:
+          type: string
+          enum: [ABIERTO, CORREGIDO]
+        metadata:
+          type: object
+          additionalProperties: true
+    VisitPoint:
+      type: object
+      required: [id, title, status, findings]
+      properties:
+        id: { type: string, minLength: 1 }
+        title: { type: string }
+        status:
+          type: string
+          enum: [PENDING, OK, NOK, SC, NA]
+        findings:
+          type: array
+          items: { $ref: "#/components/schemas/VisitFinding" }
+    VisitSection:
+      type: object
+      required: [id, name, title, status, points]
+      properties:
+        id: { type: string, minLength: 1 }
+        name: { type: string }
+        title: { type: string }
+        status:
+          type: string
+          enum: [PENDING, OK, NOK, SC, NA]
+        points:
+          type: array
+          items: { $ref: "#/components/schemas/VisitPoint" }
+    VisitSnapshot:
+      type: object
+      required:
+        - visitId
+        - siteId
+        - siteName
+        - workOrder
+        - technician
+        - visitDate
+        - lifecycleStatus
+        - syncStatus
+        - clientUpdatedAt
+        - closedAt
+        - reopenedAt
+        - serverVersion
+        - sections
+        - auditEvents
+        - photos
+      properties:
+        visitId: { type: string, minLength: 1 }
+        siteId: { type: string }
+        siteName: { type: string }
+        workOrder: { type: string }
+        technician: { type: string }
+        visitDate: { type: string, format: date-time }
+        lifecycleStatus:
+          type: string
+          enum: [BORRADOR, ABIERTA, CERRADA, REABIERTA]
+        syncStatus:
+          type: string
+          enum: [PENDIENTE, SINCRONIZANDO, SINCRONIZADO, ERROR]
+        clientUpdatedAt: { type: string, format: date-time }
+        closedAt: { type: ["string", "null"], format: date-time }
+        reopenedAt: { type: ["string", "null"], format: date-time }
+        serverVersion: { type: integer, minimum: 0 }
+        sections:
+          type: array
+          items: { $ref: "#/components/schemas/VisitSection" }
+        auditEvents:
+          type: array
+          items: { $ref: "#/components/schemas/VisitAuditEvent" }
+        photos:
+          type: array
+          items: { $ref: "#/components/schemas/VisitPhoto" }
+    VisitListResponse:
+      type: array
+      items:
+        $ref: "#/components/schemas/VisitSnapshot"
+    VisitSyncInput:
+      allOf:
+        - $ref: "#/components/schemas/VisitSnapshot"
+        - type: object
+          required: [operationId]
+          properties:
+            operationId: { type: string, minLength: 1, maxLength: 200 }
+    VisitSyncConfirmation:
+      type: object
+      required: [visitId, confirmedAt, serverVersion, idempotentReplay]
+      properties:
+        visitId: { type: string }
+        confirmedAt: { type: string, format: date-time }
+        serverVersion: { type: integer, minimum: 1 }
+        idempotentReplay: { type: boolean }
+    UploadUrlRequest:
+      type: object
+      required: [name, size, contentType, visitId, localId, type]
+      properties:
+        name: { type: string, minLength: 1 }
+        size: { type: integer, minimum: 1, maximum: 10485760 }
+        contentType:
+          type: string
+          enum: [image/jpeg, image/png]
+        visitId: { type: string, minLength: 1 }
+        sectionId: { type: ["string", "null"] }
+        pointId: { type: ["string", "null"] }
+        findingId: { type: ["string", "null"] }
+        type: { type: string, minLength: 1 }
+        localId: { type: string, minLength: 1 }
+    UploadUrlResponse:
+      type: object
+      required: [uploadURL, objectPath, metadata]
+      properties:
+        uploadURL: { type: string, format: uri }
+        objectPath: { type: string }
+        metadata:
+          $ref: "#/components/schemas/UploadUrlRequest"
 

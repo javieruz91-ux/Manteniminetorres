@@ -38,7 +38,9 @@
           "cameraPermission": "La aplicación requiere acceso a la cámara para documentar los hallazgos."
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      "expo-web-browser",
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,

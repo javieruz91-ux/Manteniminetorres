@@ -1,0 +1,1 @@
+- [Offline sync consistency](offline-sync-consistency.md) — preserve revision identity across every durable-write and network boundary; validate mobile/server vocabularies together.

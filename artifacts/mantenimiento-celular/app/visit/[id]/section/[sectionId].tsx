@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useVisits } from '@/context/VisitContext';
 import { useColors } from '@/hooks/useColors';
@@ -11,7 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function SectionDetailScreen() {
   const { id, sectionId } = useLocalSearchParams<{ id: string, sectionId: string }>();
-  const { getVisit, updatePointStatus } = useVisits();
+  const { getVisit, updatePointStatus, saveFindingAndStatus } = useVisits();
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -21,15 +21,40 @@ export default function SectionDetailScreen() {
 
   if (!visit || !section) return null;
 
-  const handleStatusSelect = (pointId: string, status: ChecklistStatus) => {
+  const isReadOnly = visit.lifecycleStatus === 'CERRADA';
+
+  const handleStatusSelect = async (pointId: string, status: ChecklistStatus) => {
+    if (isReadOnly) return;
     Haptics.selectionAsync();
-    updatePointStatus(visit.id, section.id, pointId, status);
     
     if (status === 'NOK') {
+      // Don't update point status yet to avoid orphan NOK records.
+      // Instead, navigate to finding creation. Status is updated there.
       router.push({
         pathname: `/visit/${visit.id}/finding/${pointId}` as any,
         params: { sectionId: section.id }
       });
+    } else {
+      // If changing from NOK to something else, prompt to delete finding
+      const hasFinding = visit.findings.find(f => f.pointId === pointId);
+      if (hasFinding) {
+        Alert.alert(
+          'Eliminar Hallazgo',
+          'Al cambiar el estado se eliminará el hallazgo registrado. ¿Continuar?',
+          [
+            { text: 'Cancelar', style: 'cancel' },
+            { 
+              text: 'Eliminar', 
+              style: 'destructive',
+              onPress: async () => {
+                await saveFindingAndStatus(visit.id, pointId, section.id, status, null);
+              }
+            }
+          ]
+        );
+      } else {
+        await updatePointStatus(visit.id, section.id, pointId, status);
+      }
     }
   };
 
@@ -38,13 +63,14 @@ export default function SectionDetailScreen() {
     return (
       <TouchableOpacity
         testID={`btn-status-${targetStatus}`}
-        activeOpacity={0.7}
+        activeOpacity={isReadOnly ? 1 : 0.7}
         onPress={() => handleStatusSelect(pointId, targetStatus)}
         style={[
           styles.statusBtn,
           {
             backgroundColor: isSelected ? color : colors.background,
             borderColor: isSelected ? color : colors.border,
+            opacity: isReadOnly && !isSelected ? 0.5 : 1
           }
         ]}
       >
@@ -65,7 +91,7 @@ export default function SectionDetailScreen() {
         <View style={styles.header}>
           <Text style={[styles.title, { color: colors.foreground }]}>{section.title}</Text>
           <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
-            Evalúa cada punto. Al marcar NOK se solicitará evidencia.
+            {isReadOnly ? "Visita de solo lectura. No se permiten cambios." : "Evalúa cada punto. Al marcar NOK se solicitará evidencia."}
           </Text>
         </View>
 

@@ -1,68 +1,191 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, Alert, Modal, TextInput } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useVisits } from '@/context/VisitContext';
+import { useAuth } from '@/lib/auth';
 import { useColors } from '@/hooks/useColors';
 import { Card } from '@/components/Card';
 import { Button } from '@/components/Button';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as Crypto from 'expo-crypto';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { generateAndShareCSV, generateAndSharePDF } from '@/utils/report';
+import { generateAndShareXLSX, generateAndSharePDF } from '@/utils/report';
+import { AuditEvent, Finding } from '@/types';
 
 export default function SummaryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { getVisit, updateVisit } = useVisits();
+  const { getVisit, updateVisit, triggerSync, closeVisit, reopenVisit, isOnline } = useVisits();
+  const { user, login } = useAuth();
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const [isSyncing, setIsSyncing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [reopenModalVisible, setReopenModalVisible] = useState(false);
+  const [reopenReason, setReopenReason] = useState('');
 
   const visit = getVisit(id);
   if (!visit) return null;
 
-  // Validation
+  // Exact Validations
   const isGeneralDataComplete = !!(visit.siteId && visit.siteName && visit.workOrder && visit.technician);
   
   let allPointsEvaluated = true;
   let allNokHaveFindings = true;
+  let missingItems: string[] = [];
   
+  const isValidDate = (dateString: string) => /^\d{4}-\d{2}-\d{2}$/.test(dateString);
+
   visit.sections.forEach(section => {
     section.points.forEach(point => {
       if (point.status === 'PENDING') {
         allPointsEvaluated = false;
+        missingItems.push(`Punto sin evaluar: ${section.title} - ${point.title}`);
       }
       if (point.status === 'NOK') {
-        const hasFinding = visit.findings.some(f => f.pointId === point.id);
-        if (!hasFinding) allNokHaveFindings = false;
+        const finding = visit.findings.find(f => f.pointId === point.id);
+        if (!finding) {
+          allNokHaveFindings = false;
+          missingItems.push(`Falta hallazgo para punto NOK: ${section.title} - ${point.title}`);
+        } else {
+          // Check finding constraints
+          if (!finding.description || !finding.responsible || !finding.commitmentDate) {
+             allNokHaveFindings = false;
+             missingItems.push(`Datos de hallazgo incompletos en: ${section.title} - ${point.title}`);
+          }
+          if (!isValidDate(finding.commitmentDate)) {
+             allNokHaveFindings = false;
+             missingItems.push(`Fecha de compromiso con formato inválido en: ${section.title} - ${point.title}`);
+          }
+          if (!finding.photos.some(p => p.type === 'ANTES')) {
+             allNokHaveFindings = false;
+             missingItems.push(`Falta foto ANTES en hallazgo: ${section.title} - ${point.title}`);
+          }
+          if (finding.state === 'CORREGIDO') {
+             if (!finding.photos.some(p => p.type === 'DESPUES')) {
+               allNokHaveFindings = false;
+               missingItems.push(`Falta foto DESPUES en hallazgo corregido: ${section.title} - ${point.title}`);
+             }
+             if (!finding.completedDate || !isValidDate(finding.completedDate)) {
+               allNokHaveFindings = false;
+               missingItems.push(`Fecha de corrección inválida en: ${section.title} - ${point.title}`);
+             }
+          }
+        }
       }
     });
   });
 
-  const canSync = isGeneralDataComplete && allPointsEvaluated && allNokHaveFindings && visit.status !== 'SINCRONIZADO';
+  const canClose = isGeneralDataComplete && allPointsEvaluated && allNokHaveFindings;
+  const isClosed = visit.lifecycleStatus === 'CERRADA';
 
-  const handleSync = async () => {
-    if (!canSync) {
-      Alert.alert('Incompleto', 'Revisa los requisitos antes de sincronizar.');
+  const createAuditEvent = (action: string, reason: string): AuditEvent => {
+    return {
+      id: Crypto.randomUUID(),
+      eventType: action,
+      occurredAt: new Date().toISOString(),
+      actorId: user?.id || 'unknown',
+      metadata: { reason }
+    };
+  };
+
+  const handleCloseVisit = async () => {
+    if (!canClose) {
+      if (!isGeneralDataComplete) {
+         missingItems.unshift("Datos generales del sitio incompletos.");
+      }
+      Alert.alert('Incompleto', 'Faltan los siguientes requisitos:\n\n' + missingItems.join('\n'));
       return;
     }
 
-    setIsSyncing(true);
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    if (!user) {
+      Alert.alert(
+        'Iniciar Sesión Requerido',
+        'Necesitas iniciar sesión para cerrar y sincronizar la visita.',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Iniciar Sesión', onPress: () => login() }
+        ]
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Cerrar Visita',
+      '¿Estás seguro de cerrar esta visita? No podrás hacer más cambios hasta reabrirla.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Cerrar', 
+          onPress: async () => {
+            try {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              const auditEvent = createAuditEvent('CLOSE_VISIT', 'Visita cerrada y lista para sincronización');
+              await closeVisit(visit.id, auditEvent);
+              triggerSync();
+              Alert.alert('¡Cerrada!', 'La visita ha sido cerrada y está en cola de sincronización.');
+            } catch (e: any) {
+              Alert.alert('Error', e.message);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const confirmReopenVisit = async () => {
+    if (!reopenReason.trim()) {
+      Alert.alert('Razón requerida', 'Debes especificar por qué reabres la visita.');
+      return;
+    }
     
-    updateVisit(visit.id, { status: 'SINCRONIZADO' });
-    setIsSyncing(false);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    Alert.alert('¡Éxito!', 'La visita ha sido sincronizada al servidor.');
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      const auditEvent = createAuditEvent('REOPEN_VISIT', reopenReason);
+      await reopenVisit(visit.id, auditEvent);
+      triggerSync(); 
+      setReopenModalVisible(false);
+      setReopenReason('');
+      Alert.alert('Reabierta', 'La visita ha sido reabierta.');
+    } catch (e: any) {
+      Alert.alert('Error', e.message);
+    }
+  };
+
+  const handleReopenVisit = () => {
+    if (!user) {
+      Alert.alert('Iniciar Sesión Requerido', 'Necesitas iniciar sesión para reabrir la visita.', [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Iniciar Sesión', onPress: () => login() }
+      ]);
+      return;
+    }
+
+    setReopenModalVisible(true);
+  };
+
+  const handleManualSync = async () => {
+    if (!user) {
+      Alert.alert('Iniciar Sesión Requerido', 'Necesitas iniciar sesión para sincronizar.', [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Iniciar Sesión', onPress: () => login() }
+      ]);
+      return;
+    }
+    
+    try {
+      await updateVisit(visit.id, { nextAttemptAt: Date.now() });
+      triggerSync();
+    } catch (e: any) {
+      Alert.alert('Error', e.message);
+    }
   };
 
   const handleDownloadCSV = async () => {
     try {
       setIsGenerating(true);
-      await generateAndShareCSV(visit);
+      await generateAndShareXLSX(visit);
     } catch (error) {
       Alert.alert('Error', 'No se pudo generar el archivo de mantenimiento.');
     } finally {
@@ -94,10 +217,16 @@ export default function SummaryScreen() {
         
         <Card style={styles.card}>
           <Text style={[styles.cardTitle, { color: colors.foreground }]}>Estado de la Visita</Text>
+          <Text style={{ color: colors.mutedForeground, marginBottom: 12 }}>
+            Ciclo de Vida: <Text style={{ fontFamily: 'Inter_700Bold', color: colors.foreground }}>{visit.lifecycleStatus}</Text>
+          </Text>
+          <Text style={{ color: colors.mutedForeground, marginBottom: 12 }}>
+            Sincronización: <Text style={{ fontFamily: 'Inter_700Bold', color: colors.foreground }}>{visit.syncStatus}</Text>
+          </Text>
           
           <ValidationItem ok={isGeneralDataComplete} text="Datos generales completos" />
           <ValidationItem ok={allPointsEvaluated} text="Todos los puntos de checklist evaluados" />
-          <ValidationItem ok={allNokHaveFindings} text="Todos los puntos NOK tienen hallazgos" />
+          <ValidationItem ok={allNokHaveFindings} text="Requisitos completos en hallazgos (NOK)" />
         </Card>
 
         <Card style={styles.card}>
@@ -116,19 +245,39 @@ export default function SummaryScreen() {
           </View>
         </Card>
 
-        {visit.status === 'SINCRONIZADO' ? (
-          <Card style={[styles.card, { borderColor: colors.success, borderWidth: 2 }]}>
+        {visit.syncError && (
+          <Card style={[styles.card, { borderColor: colors.destructive, borderWidth: 1 }]}>
+            <Text style={[styles.cardTitle, { color: colors.destructive }]}>Error de Sincronización</Text>
+            <Text style={{ color: colors.foreground }}>{visit.syncError}</Text>
+            <Text style={{ color: colors.mutedForeground, marginTop: 4, fontSize: 12 }}>
+              Reintentos: {visit.syncAttemptCount || 0}
+            </Text>
+            <Button 
+              title="Forzar Sincronización"
+              variant="outline"
+              onPress={handleManualSync}
+              style={{ marginTop: 12 }}
+            />
+          </Card>
+        )}
+
+        {isClosed ? (
+          <Card style={[styles.card, { borderColor: visit.syncStatus === 'SINCRONIZADO' ? colors.success : colors.primary, borderWidth: 2 }]}>
             <View style={{ alignItems: 'center', marginBottom: 20 }}>
-              <Feather name="check-circle" size={48} color={colors.success} style={{ marginBottom: 12 }} />
-              <Text style={[styles.cardTitle, { color: colors.foreground, textAlign: 'center' }]}>Visita Sincronizada</Text>
+              <Feather name={visit.syncStatus === 'SINCRONIZADO' ? "check-circle" : "cloud"} size={48} color={visit.syncStatus === 'SINCRONIZADO' ? colors.success : colors.primary} style={{ marginBottom: 12 }} />
+              <Text style={[styles.cardTitle, { color: colors.foreground, textAlign: 'center' }]}>
+                {visit.syncStatus === 'SINCRONIZADO' ? 'Visita Sincronizada' : 'Visita Cerrada'}
+              </Text>
               <Text style={{ color: colors.mutedForeground, textAlign: 'center', marginTop: 4 }}>
-                Los datos ya están en el servidor central. Puedes descargar los reportes.
+                {visit.syncStatus === 'SINCRONIZADO' 
+                  ? 'Los datos ya están en el servidor central. Puedes descargar los reportes.' 
+                  : 'La visita está cerrada y lista para sincronizarse.'}
               </Text>
             </View>
             
             <View style={{ gap: 12 }}>
               <Button 
-                title="Descargar Reporte (CSV)"
+                title="Descargar Reporte Excel"
                 variant="outline"
                 icon={<Feather name="download" size={18} color={colors.foreground} />}
                 onPress={handleDownloadCSV}
@@ -143,27 +292,66 @@ export default function SummaryScreen() {
                 loading={isGenerating}
               />
               <Button 
-                title="Volver al Inicio"
-                variant="primary"
-                onPress={() => router.navigate('/')}
-                style={{ marginTop: 12 }}
-                disabled={isGenerating}
+                title="Reabrir Visita"
+                variant="destructive"
+                onPress={handleReopenVisit}
+                disabled={isGenerating || visit.syncStatus === 'SINCRONIZANDO'}
               />
             </View>
           </Card>
         ) : (
           <Button
-            testID="btn-sync-visit"
-            title={isSyncing ? "Sincronizando..." : "Sincronizar Visita"}
+            testID="btn-close-visit"
+            title="Cerrar Visita"
             size="lg"
-            onPress={handleSync}
-            disabled={!canSync || isSyncing}
-            loading={isSyncing}
-            icon={!isSyncing && <Feather name="upload-cloud" size={20} color={!canSync ? colors.mutedForeground : "#FFF"} />}
+            onPress={handleCloseVisit}
+            disabled={!canClose}
+            icon={<Feather name="lock" size={20} color={!canClose ? colors.mutedForeground : "#FFF"} />}
             style={{ marginTop: 20 }}
           />
         )}
       </ScrollView>
+
+      <Modal visible={reopenModalVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.background }]}>
+            <Text style={[styles.cardTitle, { color: colors.foreground, marginBottom: 8 }]}>Reabrir Visita</Text>
+            <Text style={{ color: colors.mutedForeground, marginBottom: 16 }}>
+              Por favor indica la razón para reabrir la visita:
+            </Text>
+            
+            <TextInput
+              style={[
+                styles.modalInput, 
+                { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }
+              ]}
+              placeholder="Razón de reapertura..."
+              placeholderTextColor={colors.mutedForeground}
+              value={reopenReason}
+              onChangeText={setReopenReason}
+              multiline
+            />
+            
+            <View style={styles.modalActions}>
+              <Button 
+                title="Cancelar" 
+                variant="outline" 
+                onPress={() => {
+                  setReopenModalVisible(false);
+                  setReopenReason('');
+                }} 
+                style={{ flex: 1 }} 
+              />
+              <Button 
+                title="Reabrir" 
+                variant="destructive" 
+                onPress={confirmReopenVisit} 
+                style={{ flex: 1 }} 
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -207,5 +395,31 @@ const styles = StyleSheet.create({
   statValue: {
     fontSize: 16,
     fontFamily: 'Inter_700Bold',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  modalContent: {
+    width: '100%',
+    padding: 24,
+    borderRadius: 12,
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    minHeight: 100,
+    textAlignVertical: 'top',
+    fontFamily: 'Inter_400Regular',
+    fontSize: 15,
+    marginBottom: 20,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
   }
 });

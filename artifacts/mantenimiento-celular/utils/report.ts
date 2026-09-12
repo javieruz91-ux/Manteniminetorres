@@ -2,85 +2,157 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
 import { Platform } from 'react-native';
-import { Visit, Photo } from '../types';
+import { Visit } from '../types';
+import * as XLSX from 'xlsx';
 
-function escapeCSV(val: string | undefined | null) {
-  if (!val) return '';
-  const stringVal = String(val);
-  if (stringVal.includes(',') || stringVal.includes('"') || stringVal.includes('\n')) {
-    return `"${stringVal.replace(/"/g, '""')}"`;
-  }
-  return stringVal;
-}
+export async function generateAndShareXLSX(visit: Visit) {
+  const wb = XLSX.utils.book_new();
 
-export async function generateAndShareCSV(visit: Visit) {
-  const BOM = '\uFEFF';
-  const headers = [
-    'Sitio ID', 'Sitio Nombre', 'Orden de Trabajo', 'Técnico', 'Fecha',
-    'Sección', 'Punto', 'Estado',
-    'Hoja', 'Punto', 'A quien corresponde', 'Descripción', 'Fecha de inicio', 'Fecha realizado OK'
+  const presentationData = [
+    ['REPORTE DE MANTENIMIENTO PREVENTIVO'],
+    [],
+    ['Sitio ID', visit.siteId],
+    ['Nombre del Sitio', visit.siteName],
+    ['Orden de Trabajo', visit.workOrder],
+    ['Técnico', visit.technician],
+    ['Fecha', new Date(visit.visitDate).toLocaleDateString()],
+    ['Ciclo de Vida', visit.lifecycleStatus],
+    ['Sincronización', visit.syncStatus]
+  ];
+  const wsPresentation = XLSX.utils.aoa_to_sheet(presentationData);
+  wsPresentation['!cols'] = [{ wch: 20 }, { wch: 30 }];
+  XLSX.utils.book_append_sheet(wb, wsPresentation, 'PRESENTACION');
+
+  const SHEET_NAMES = [
+    'ALARMAS DE FUERZA', 'PLANTA HUAWEI', 'INFRAESTRUCTURA', 
+    'ELECTROMECANICA', 'TIERRAS', 'TRANSMISION'
   ];
 
-  let csvContent = BOM + headers.join(',') + '\n';
+  const CANONICAL_SHEETS = [
+    'ALARMAS DE FUERZA', 'PLANTA HUAWEI', 'INFRAESTRUCTURA', 
+    'ELECTROMECANICA', 'TIERRAS', 'TRANSMISION'
+  ];
 
+  for (const sheetName of CANONICAL_SHEETS) {
+    const section = visit.sections.find(s => s.title.toUpperCase() === sheetName || s.name.toUpperCase() === sheetName);
+    const data = [
+      ['Punto', 'Estado', 'Hallazgo', 'Prioridad', 'Responsable', 'Fecha Compromiso']
+    ];
+    
+    if (section) {
+      section.points.forEach(point => {
+        const finding = visit.findings.find(f => f.pointId === point.id);
+        data.push([
+          point.title,
+          point.status,
+          finding ? finding.description : '',
+          finding ? finding.priority : '',
+          finding ? finding.responsible : '',
+          finding ? finding.commitmentDate : ''
+        ]);
+      });
+    }
+    
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    ws['!cols'] = [{ wch: 25 }, { wch: 10 }, { wch: 40 }, { wch: 15 }, { wch: 20 }, { wch: 15 }];
+    ws['!freeze'] = { ySplit: 1, xSplit: 0, topRow: 1, activePane: 'bottomLeft', state: 'frozen' } as any;
+    ws['!autofilter'] = { ref: `A1:F${data.length}` };
+    
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  }
+
+  const segData = [
+    ['Hoja', 'Punto', 'A quien corresponde', 'Descripción', 'Fecha de inicio', 'Fecha realizado OK']
+  ];
   visit.sections.forEach(section => {
     section.points.forEach(point => {
       const finding = visit.findings.find(f => f.pointId === point.id);
-      
-      const row = [
-        escapeCSV(visit.siteId),
-        escapeCSV(visit.siteName),
-        escapeCSV(visit.workOrder),
-        escapeCSV(visit.technician),
-        escapeCSV(new Date(visit.date).toLocaleDateString()),
-        escapeCSV(section.title),
-        escapeCSV(point.title),
-        escapeCSV(point.status),
-        finding ? escapeCSV(section.title) : '',
-        finding ? escapeCSV(point.title) : '',
-        finding ? escapeCSV(finding.responsible) : '',
-        finding ? escapeCSV(finding.description) : '',
-        finding ? escapeCSV(new Date(visit.date).toLocaleDateString()) : '',
-        finding ? escapeCSV(finding.commitmentDate) : '',
-      ];
-
-      csvContent += row.join(',') + '\n';
+      if (finding) {
+        segData.push([
+          section.title,
+          point.title,
+          finding.responsible,
+          finding.description,
+          finding.startDate,
+          finding.state === 'CORREGIDO' && finding.completedDate ? finding.completedDate : 'PENDIENTE'
+        ]);
+      }
     });
   });
+  const wsSeg = XLSX.utils.aoa_to_sheet(segData);
+  wsSeg['!cols'] = [{ wch: 20 }, { wch: 25 }, { wch: 20 }, { wch: 40 }, { wch: 15 }, { wch: 20 }];
+  wsSeg['!freeze'] = { ySplit: 1, xSplit: 0, topRow: 1, activePane: 'bottomLeft', state: 'frozen' } as any;
+  wsSeg['!autofilter'] = { ref: `A1:F${segData.length}` };
+  XLSX.utils.book_append_sheet(wb, wsSeg, 'HOJA DE SEG');
 
-  const filename = `mantenimiento_${visit.siteId}_${visit.workOrder}.csv`;
+  const photoData = [
+    ['Punto', 'Tipo', 'Estado de Subida', 'Ruta de Archivo']
+  ];
+  visit.findings.forEach(f => {
+    const section = visit.sections.find(s => s.id === f.sectionId);
+    const point = section?.points.find(p => p.id === f.pointId);
+    f.photos.forEach(p => {
+      photoData.push([
+        point ? point.title : '',
+        p.type,
+        p.uploadStatus,
+        p.objectPath || 'N/A'
+      ]);
+    });
+  });
+  const wsPhoto = XLSX.utils.aoa_to_sheet(photoData);
+  wsPhoto['!cols'] = [{ wch: 25 }, { wch: 15 }, { wch: 15 }, { wch: 50 }];
+  wsPhoto['!freeze'] = { ySplit: 1, xSplit: 0, topRow: 1, activePane: 'bottomLeft', state: 'frozen' } as any;
+  wsPhoto['!autofilter'] = { ref: `A1:D${photoData.length}` };
+  XLSX.utils.book_append_sheet(wb, wsPhoto, 'REPORTE FOTOGRAFICO');
+
+  const EXPECTED_SHEETS = ['PRESENTACION', ...CANONICAL_SHEETS, 'HOJA DE SEG', 'REPORTE FOTOGRAFICO'];
+  if (wb.SheetNames.length !== 9 || !wb.SheetNames.every((name, i) => name === EXPECTED_SHEETS[i])) {
+    throw new Error("Error de aserción: La estructura del archivo Excel no coincide con el estándar requerido (exactamente 9 hojas).");
+  }
+
+  const b64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+  const filename = `mantenimiento_${visit.siteId}_${visit.workOrder}.xlsx`;
 
   if (Platform.OS === 'web') {
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob([s2ab(atob(b64))], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
+    link.href = url;
     link.download = filename;
     link.click();
   } else {
     const uri = FileSystem.cacheDirectory + filename;
-    await FileSystem.writeAsStringAsync(uri, csvContent, { encoding: FileSystem.EncodingType.UTF8 });
+    await FileSystem.writeAsStringAsync(uri, b64, { encoding: FileSystem.EncodingType.Base64 });
     await Sharing.shareAsync(uri);
   }
 }
 
-async function getImageBase64(uri: string): Promise<string> {
-  if (Platform.OS === 'web') {
-    return uri; // Web mostly uses data:image or blob:, which Print handles well or we can just fetch and convert.
-    // If it's a blob url, we might need to convert it to base64 for window.print to work if it's external, but blob is usually fine.
-  }
-  
-  if (uri.startsWith('data:')) {
-    return uri;
-  }
+function s2ab(s: string) {
+  const buf = new ArrayBuffer(s.length);
+  const view = new Uint8Array(buf);
+  for (let i=0; i!==s.length; ++i) view[i] = s.charCodeAt(i) & 0xFF;
+  return buf;
+}
+
+async function getImageBase64(uri: string): Promise<string | null> {
+  if (Platform.OS === 'web') return uri;
+  if (uri.startsWith('data:')) return uri;
 
   try {
+    const fileInfo = await FileSystem.getInfoAsync(uri);
+    if (!fileInfo.exists) return null;
     const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
     const extension = uri.split('.').pop()?.toLowerCase() === 'png' ? 'png' : 'jpeg';
     return `data:image/${extension};base64,${base64}`;
   } catch (error) {
     console.warn('Error reading image to base64', error);
-    return uri;
+    return null;
   }
+}
+
+function escapeHtml(unsafe: string) {
+  return (unsafe || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
 export async function generateAndSharePDF(visit: Visit) {
@@ -94,23 +166,25 @@ export async function generateAndSharePDF(visit: Visit) {
           .info-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
           .info-table th, .info-table td { border: 1px solid #E2E8F0; padding: 8px; text-align: left; }
           .info-table th { background-color: #F8FAFC; width: 30%; }
-          .finding { margin-bottom: 30px; page-break-inside: avoid; border: 1px solid #E2E8F0; padding: 10px; border-radius: 8px; }
+          .finding { margin-bottom: 30px; border: 1px solid #E2E8F0; padding: 10px; border-radius: 8px; }
+  .photo-card { width: 100%; margin-bottom: 20px; page-break-inside: avoid; border: 1px solid #E2E8F0; padding: 10px; border-radius: 8px; }
           .finding-header { font-weight: bold; margin-bottom: 10px; font-size: 16px; background-color: #F1F5F9; padding: 8px; }
           .photos-grid { display: flex; flex-wrap: wrap; gap: 10px; }
-          .photo-card { width: 48%; margin-bottom: 10px; }
+          
           .photo-img { width: 100%; height: 200px; object-fit: contain; border: 1px solid #E2E8F0; border-radius: 4px; }
           .photo-label { font-size: 12px; font-weight: bold; text-align: center; margin-top: 4px; }
           .observations { font-size: 14px; margin-bottom: 10px; }
+          .missing-photo { border: 1px dashed red; height: 200px; display: flex; align-items: center; justify-content: center; color: red; font-size: 12px; font-weight: bold; }
         </style>
       </head>
       <body>
         <h1>Reporte Fotográfico de Mantenimiento</h1>
         <table class="info-table">
-          <tr><th>Sitio ID</th><td>${visit.siteId}</td></tr>
-          <tr><th>Nombre del Sitio</th><td>${visit.siteName}</td></tr>
-          <tr><th>Orden de Trabajo</th><td>${visit.workOrder}</td></tr>
-          <tr><th>Técnico</th><td>${visit.technician}</td></tr>
-          <tr><th>Fecha</th><td>${new Date(visit.date).toLocaleDateString()}</td></tr>
+          <tr><th>Sitio ID</th><td>${escapeHtml(visit.siteId)}</td></tr>
+          <tr><th>Nombre del Sitio</th><td>${escapeHtml(visit.siteName)}</td></tr>
+          <tr><th>Orden de Trabajo</th><td>${escapeHtml(visit.workOrder)}</td></tr>
+          <tr><th>Técnico</th><td>${escapeHtml(visit.technician)}</td></tr>
+          <tr><th>Fecha</th><td>${escapeHtml(new Date(visit.visitDate).toLocaleDateString())}</td></tr>
         </table>
         <h2>Evidencias de Hallazgos (NOK)</h2>
   `;
@@ -118,46 +192,51 @@ export async function generateAndSharePDF(visit: Visit) {
   if (visit.findings.length === 0) {
     html += `<p>No se registraron hallazgos (NOK) en esta visita.</p>`;
   } else {
-    // Process up to 16 slots total (this is a rough requirement, we can just process all findings).
-    // The prompt says "up to 16 photo/evidence slots", we'll just cap the total photos processed.
-    let photoCount = 0;
-
     for (const finding of visit.findings) {
-      if (photoCount >= 16) break;
-
       const section = visit.sections.find(s => s.id === finding.sectionId);
       const point = section?.points.find(p => p.id === finding.pointId);
       
-      html += `
-        <div class="finding">
-          <div class="finding-header">
-            Sección: ${section?.title} | Punto: ${point?.title}
+      const headerHtml = `
+          <div class="finding-header" style="font-weight: bold; font-size: 16px; background-color: #F1F5F9; padding: 8px; margin-bottom: 10px;">
+            Sección: ${escapeHtml(section?.title || '')} | Punto: ${escapeHtml(point?.title || '')}
           </div>
-          <div class="observations">
-            <strong>Descripción:</strong> ${finding.description}<br/>
-            <strong>Responsable:</strong> ${finding.responsible} | <strong>Fecha Corrección:</strong> ${finding.commitmentDate}
+          <div class="observations" style="font-size: 14px; margin-bottom: 10px;">
+            <strong>Descripción:</strong> ${escapeHtml(finding.description)}<br/>
+            <strong>Responsable:</strong> ${escapeHtml(finding.responsible)} | <strong>Fecha Corrección:</strong> ${escapeHtml(finding.commitmentDate)} | <strong>Estado:</strong> ${escapeHtml(finding.state)}
           </div>
-          <div class="photos-grid">
       `;
 
-      for (const photo of finding.photos) {
-        if (photoCount >= 16) break;
-        
-        let base64Uri = await getImageBase64(photo.uri);
-        
-        html += `
-            <div class="photo-card">
-              <img src="${base64Uri}" class="photo-img" />
-              <div class="photo-label">Evidencia: ${photo.type}</div>
-            </div>
-        `;
-        photoCount++;
+      html += `<div class="finding">`;
+      html += headerHtml;
+      
+      if (finding.photos.length === 0) {
+        html += `<p>No hay fotos registradas.</p>`;
+      } else {
+        html += `<div class="photos-grid" style="display: block;">`;
+        for (const photo of finding.photos) {
+          let base64Uri = await getImageBase64(photo.uri);
+          
+          if (base64Uri) {
+            html += `
+                <div class="photo-card" style="page-break-inside: avoid; border: 1px solid #E2E8F0; padding: 10px; margin-bottom: 20px;">
+                  ${headerHtml}
+                  <img src="${base64Uri}" class="photo-img" style="max-height: 400px;" />
+                  <div class="photo-label">Evidencia: ${escapeHtml(photo.type)}</div>
+                </div>
+            `;
+          } else {
+            html += `
+                <div class="photo-card" style="page-break-inside: avoid; border: 1px solid #E2E8F0; padding: 10px; margin-bottom: 20px;">
+                  ${headerHtml}
+                  <div class="missing-photo" style="height: 400px; border: 1px dashed red; display: flex; align-items: center; justify-content: center; color: red;">IMAGEN NO DISPONIBLE</div>
+                  <div class="photo-label">Evidencia: ${escapeHtml(photo.type)} (Falta Archivo Local)</div>
+                </div>
+            `;
+          }
+        }
+        html += `</div>`;
       }
-
-      html += `
-          </div>
-        </div>
-      `;
+      html += `</div>`;
     }
   }
 
@@ -171,15 +250,13 @@ export async function generateAndSharePDF(visit: Visit) {
     const filename = `reporte_fotografico_${visit.siteId}_${visit.workOrder}.pdf`;
     
     if (Platform.OS === 'web') {
-      // In web, printToFileAsync sometimes returns a blob URL directly
       const link = document.createElement('a');
       link.href = uri;
       link.download = filename;
       link.click();
     } else {
-      // Rename file to have a nice filename when sharing
       const newUri = FileSystem.cacheDirectory + filename;
-      await FileSystem.moveAsync({ from: uri, to: newUri });
+      await FileSystem.copyAsync({ from: uri, to: newUri });
       await Sharing.shareAsync(newUri);
     }
   } catch (error) {
