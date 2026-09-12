@@ -10,55 +10,7 @@ import { VisitSyncInput, VisitPhoto, VisitPhotoUploadStatus, UploadUrlRequestCon
 import { Platform } from 'react-native';
 import { useAuth } from '@/lib/auth';
 import * as SecureStore from 'expo-secure-store';
-
-const INITIAL_SECTIONS: Section[] = [
-  {
-    id: 's1', name: 'ALARMAS DE FUERZA', title: 'Alarmas de fuerza', status: 'PENDING',
-    points: [
-      { id: 'p1_1', title: 'Falla de AC', status: 'PENDING' },
-      { id: 'p1_2', title: 'Rectificador averiado', status: 'PENDING' },
-      { id: 'p1_3', title: 'Bajo voltaje DC', status: 'PENDING' },
-    ],
-  },
-  {
-    id: 's2', name: 'PLANTA HUAWEI', title: 'Planta Huawei', status: 'PENDING',
-    points: [
-      { id: 'p2_1', title: 'Estado de módulos', status: 'PENDING' },
-      { id: 'p2_2', title: 'Baterías y cableado', status: 'PENDING' },
-      { id: 'p2_3', title: 'Controlador SMU', status: 'PENDING' },
-    ],
-  },
-  {
-    id: 's3', name: 'INFRAESTRUCTURA', title: 'Infraestructura', status: 'PENDING',
-    points: [
-      { id: 'p3_1', title: 'Cerramiento y candados', status: 'PENDING' },
-      { id: 'p3_2', title: 'Estado de torre/mástil', status: 'PENDING' },
-      { id: 'p3_3', title: 'Impermeabilización', status: 'PENDING' },
-    ],
-  },
-  {
-    id: 's4', name: 'ELECTROMECANICA', title: 'Electromecánica', status: 'PENDING',
-    points: [
-      { id: 'p4_1', title: 'Tableros de transferencia', status: 'PENDING' },
-      { id: 'p4_2', title: 'Climatización/Aires', status: 'PENDING' },
-      { id: 'p4_3', title: 'Grupo electrógeno', status: 'PENDING' },
-    ],
-  },
-  {
-    id: 's5', name: 'TIERRAS', title: 'Tierras', status: 'PENDING',
-    points: [
-      { id: 'p5_1', title: 'Barras de tierra', status: 'PENDING' },
-      { id: 'p5_2', title: 'Conexiones equipotenciales', status: 'PENDING' },
-    ],
-  },
-  {
-    id: 's6', name: 'TRANSMISION', title: 'Transmisión', status: 'PENDING',
-    points: [
-      { id: 'p6_1', title: 'Alineación de antenas', status: 'PENDING' },
-      { id: 'p6_2', title: 'Cables ODU/IDU', status: 'PENDING' },
-    ],
-  },
-];
+import { createInitialSections } from '../data/checklist';
 
 interface VisitContextValue {
   visits: Visit[];
@@ -335,7 +287,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       closedAt: null,
       reopenedAt: null,
       serverVersion: 0,
-      sections: JSON.parse(JSON.stringify(INITIAL_SECTIONS)),
+      sections: createInitialSections(),
       findings: [],
       auditEvents: [],
       operationId: Crypto.randomUUID(),

@@ -40,6 +40,10 @@ const REQUIRED_SECTION_NAMES = [
   "ELECTROMECANICA",
   "TIERRAS",
   "TRANSMISION",
+  "RADIOFRECUENCIA",
+  "ENERGIA SOLAR",
+  "SISTEMA DE SEGURIDAD",
+  "OBRA CIVIL",
 ] as const;
 const objectStorageService = new ObjectStorageService();
 
