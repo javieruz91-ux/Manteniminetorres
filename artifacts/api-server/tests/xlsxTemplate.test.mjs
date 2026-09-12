@@ -13,6 +13,22 @@ execFileSync("pnpm", ["exec", "esbuild", "src/lib/xlsxTemplate.ts", "--bundle", 
 });
 const { EXPECTED_SHEETS, embedEvidence, parseTemplate, patchTemplate, verifyTemplate } = await import(bundle);
 
+// This is the recovered structural export of the official workbook contract.
+// Keep it explicit so a future change cannot silently alter sheet names/order
+// while the original binary is still unavailable in the workspace.
+assert.deepEqual(EXPECTED_SHEETS, [
+  ["PRESENTACION", 8, 24],
+  ["(HW) ALARMAS DE FUERZA", 10, 81],
+  ["PLANTA HUAWEI", 20, 70],
+  ["INFRAESTRUCTURA", 13, 278],
+  ["ELECTROMECANICA", 13, 141],
+  ["TIERRAS", 12, 80],
+  ["TRANSMISION", 11, 32],
+  ["HOJA DE SEG", 8, 42],
+  ["REPORTE FOTOGRAFICO", 13, 211],
+  ["base", 1, 1],
+]);
+
 function crc32(data) {
   let crc = 0xffffffff;
   for (const byte of data) {

@@ -1,42 +1,76 @@
-# Exportación legible de la plantilla de mantenimiento
+# Contrato legible de la plantilla de mantenimiento
 
-La plantilla binaria original no estaba disponible en el workspace. Esta
-exportación conserva el catálogo y el contrato del libro que ya estaban
-confirmados en el historial del proyecto, para que la comparación pueda
-repetirse sin depender de supuestos.
+## Estado de la fuente
 
-## Hojas del catálogo (orden)
+El archivo binario oficial (`.xlsx`) no está presente en el workspace y no se
+encontró una exportación de sus celdas. Por eso este documento **no confirma
+los nombres ni el orden de los puntos**. La lista de puntos que existía en
+versiones anteriores era una referencia provisional y no puede usarse para
+crear visitas ni para reconstruir un reporte.
 
-| # | Nombre de hoja | Título mostrado | Puntos, en orden |
-|---:|---|---|---|
-| 1 | `ALARMAS DE FUERZA` | Alarmas de fuerza | Falla de AC; Rectificador averiado; Bajo voltaje DC |
-| 2 | `PLANTA HUAWEI` | Planta Huawei | Estado de módulos; Baterías y cableado; Controlador SMU |
-| 3 | `INFRAESTRUCTURA` | Infraestructura | Cerramiento y candados; Estado de torre/mástil; Impermeabilización |
-| 4 | `ELECTROMECANICA` | Electromecánica | Tableros de transferencia; Climatización/Aires; Grupo electrógeno |
-| 5 | `TIERRAS` | Tierras | Barras de tierra; Conexiones equipotenciales |
-| 6 | `TRANSMISION` | Transmisión | Alineación de antenas; Cables ODU/IDU |
-| 7 | `RADIOFRECUENCIA` | Radiofrecuencia | Estado de antenas; Conectores y jumpers; Etiquetado de sectores |
-| 8 | `ENERGIA SOLAR` | Energía solar | Paneles solares; Controlador solar; Cableado solar |
-| 9 | `SISTEMA DE SEGURIDAD` | Sistema de seguridad | CCTV y grabador; Control de acceso; Extintores y señalización |
-| 10 | `OBRA CIVIL` | Obra civil | Losa y drenajes; Canalizaciones; Limpieza del sitio |
+El flujo de producción solo acepta una plantilla cargada por el propietario:
+el servidor la analiza, guarda su catálogo, fija su versión en cada visita y
+parcha una copia de ese mismo archivo al exportar. La fuente de código de este
+contrato estructural es `artifacts/api-server/src/lib/xlsxTemplate.ts`,
+`EXPECTED_SHEETS`; la prueba de importación conserva el mismo orden.
 
-## Hojas adicionales del libro exportado
+## Diez hojas estructurales recuperadas
 
-- `PRESENTACION`: título, Sitio ID, Nombre del Sitio, Orden de Trabajo,
-  Técnico, Fecha, Ciclo de Vida y Sincronización.
-- Cada hoja del catálogo usa los encabezados:
-  `Punto`, `Estado`, `Hallazgo`, `Prioridad`, `Responsable`, `Fecha Compromiso`.
-- `HOJA DE SEG` usa:
-  `Hoja`, `Punto`, `A quien corresponde`, `Descripción`, `Fecha de inicio`,
-  `Fecha realizado OK`.
-- `REPORTE FOTOGRAFICO` usa:
-  `Espacio`, `Hoja`, `Punto`, `Observaciones`, `Estado`, `Tipo de evidencia`,
-  `Estado de Subida`, `Ruta de Archivo`.
+La siguiente es la única comparación que puede hacerse con la evidencia
+disponible: nombres, orden y dimensiones estructurales que el parser exige.
+Las dimensiones están expresadas como número máximo de columnas × filas.
 
-## Espacios fotográficos
+| # | Nombre exacto de hoja | Dimensiones |
+|---:|---|---:|
+| 1 | `PRESENTACION` | 8 × 24 |
+| 2 | `(HW) ALARMAS DE FUERZA` | 10 × 81 |
+| 3 | `PLANTA HUAWEI` | 20 × 70 |
+| 4 | `INFRAESTRUCTURA` | 13 × 278 |
+| 5 | `ELECTROMECANICA` | 13 × 141 |
+| 6 | `TIERRAS` | 12 × 80 |
+| 7 | `TRANSMISION` | 11 × 32 |
+| 8 | `HOJA DE SEG` | 8 × 42 |
+| 9 | `REPORTE FOTOGRAFICO` | 13 × 211 |
+| 10 | `base` | 1 × 1 |
 
-El reporte reserva exactamente 16 espacios operativos, numerados del 1 al 16.
-Cada espacio conserva la hoja, el punto, la observación, el estado del
-hallazgo y los datos de la evidencia. Las fotografías que excedan el espacio
-16 se mantienen como evidencias adicionales, sin desplazar ni renumerar los
-primeros 16 espacios.
+Una plantilla con otro número de hojas, otro nombre, otro orden o una
+dimensión diferente se rechaza antes de guardar el catálogo.
+
+## Diferencias frente a la exportación provisional anterior
+
+La exportación anterior describía diez hojas operativas:
+`ALARMAS DE FUERZA`, `PLANTA HUAWEI`, `INFRAESTRUCTURA`, `ELECTROMECANICA`,
+`TIERRAS`, `TRANSMISION`, `RADIOFRECUENCIA`, `ENERGIA SOLAR`,
+`SISTEMA DE SEGURIDAD` y `OBRA CIVIL`. La evidencia estructural disponible
+obliga a tratar estas diferencias como reales, pero todavía pendientes de
+confirmación contra las celdas del archivo:
+
+- `ALARMAS DE FUERZA` no coincide con el nombre exacto recuperado:
+  `(HW) ALARMAS DE FUERZA`.
+- `RADIOFRECUENCIA`, `ENERGIA SOLAR`, `SISTEMA DE SEGURIDAD` y `OBRA CIVIL`
+  no aparecen entre las diez hojas estructurales recuperadas.
+- `PRESENTACION`, `HOJA DE SEG`, `REPORTE FOTOGRAFICO` y `base` no estaban en
+  la lista provisional.
+- Por lo anterior, no se aplican los puntos ni encabezados de la lista
+  provisional al catálogo de producción.
+
+## Qué queda pendiente del Excel oficial
+
+Cuando se incorpore el binario, hay que auditar y registrar, por hoja:
+
+1. cada texto de punto editable y su orden;
+2. encabezados, validaciones y rangos de captura;
+3. campos ignorados o pendientes de mapeo; y
+4. los slots fotográficos y su relación con `REPORTE FOTOGRAFICO`.
+
+La importación existente realiza esa auditoría y mantiene bloqueadas las
+visitas/exportaciones mientras queden celdas editables sin resolver. No se
+deben volver a agregar `checklist.ts`, `reportCore.ts` ni un libro generado
+para suplir la ausencia del archivo original.
+
+## Reporte fotográfico
+
+El contrato estructural reserva el bloque `A1:M211` en `REPORTE FOTOGRAFICO`.
+Las páginas adicionales se clonan solo cuando el archivo oficial importado
+contiene slots fotográficos mapeados; las fotografías fuera del primer bloque
+no desplazan las filas de la plantilla original.
