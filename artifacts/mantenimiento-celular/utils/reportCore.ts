@@ -3,6 +3,38 @@ import { CHECKLIST_SHEETS } from '../data/checklist';
 import { Visit } from '../types';
 
 export const PHOTO_SLOT_COUNT = 16;
+export const CHECKLIST_REPORT_HEADERS = [
+  'Punto',
+  'Estado',
+  'Hallazgo',
+  'Prioridad',
+  'Responsable',
+  'Fecha Compromiso',
+] as const;
+export const SEGMENT_REPORT_HEADERS = [
+  'Hoja',
+  'Punto',
+  'A quien corresponde',
+  'Descripción',
+  'Fecha de inicio',
+  'Fecha realizado OK',
+] as const;
+export const PHOTO_REPORT_HEADERS = [
+  'Espacio',
+  'Hoja',
+  'Punto',
+  'Observaciones',
+  'Estado',
+  'Tipo de evidencia',
+  'Estado de Subida',
+  'Ruta de Archivo',
+] as const;
+export const REPORT_WORKBOOK_SHEET_NAMES = [
+  'PRESENTACION',
+  ...CHECKLIST_SHEETS.map((sheet) => sheet.name),
+  'HOJA DE SEG',
+  'REPORTE FOTOGRAFICO',
+] as const;
 
 export interface PhotoSlot {
   slot: number;
@@ -95,9 +127,7 @@ export function buildXLSXWorkbook(visit: Visit): XLSX.WorkBook {
         candidate.title.toUpperCase() === sheetName ||
         candidate.name.toUpperCase() === sheetName,
     );
-    const data: unknown[][] = [
-      ['Punto', 'Estado', 'Hallazgo', 'Prioridad', 'Responsable', 'Fecha Compromiso'],
-    ];
+    const data: unknown[][] = [Array.from(CHECKLIST_REPORT_HEADERS)];
     if (section) {
       section.points.forEach((point) => {
         const finding = visit.findings.find((candidate) => candidate.pointId === point.id);
@@ -131,9 +161,7 @@ export function buildXLSXWorkbook(visit: Visit): XLSX.WorkBook {
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
   }
 
-  const segData: unknown[][] = [
-    ['Hoja', 'Punto', 'A quien corresponde', 'Descripción', 'Fecha de inicio', 'Fecha realizado OK'],
-  ];
+  const segData: unknown[][] = [Array.from(SEGMENT_REPORT_HEADERS)];
   getNokItems(visit).forEach(({ section, point, finding }) => {
     segData.push([
       section.title,
@@ -165,9 +193,7 @@ export function buildXLSXWorkbook(visit: Visit): XLSX.WorkBook {
   wsSeg['!autofilter'] = { ref: `A1:F${segData.length}` };
   XLSX.utils.book_append_sheet(wb, wsSeg, 'HOJA DE SEG');
 
-  const photoData: unknown[][] = [
-    ['Espacio', 'Hoja', 'Punto', 'Observaciones', 'Estado', 'Tipo de evidencia', 'Estado de Subida', 'Ruta de Archivo'],
-  ];
+  const photoData: unknown[][] = [Array.from(PHOTO_REPORT_HEADERS)];
   getPhotoSlots(visit).forEach((slot) => {
     photoData.push([
       String(slot.slot),
@@ -201,12 +227,7 @@ export function buildXLSXWorkbook(visit: Visit): XLSX.WorkBook {
   wsPhoto['!autofilter'] = { ref: `A1:H${photoData.length}` };
   XLSX.utils.book_append_sheet(wb, wsPhoto, 'REPORTE FOTOGRAFICO');
 
-  const expectedSheets = [
-    'PRESENTACION',
-    ...canonicalSheetNames,
-    'HOJA DE SEG',
-    'REPORTE FOTOGRAFICO',
-  ];
+  const expectedSheets = Array.from(REPORT_WORKBOOK_SHEET_NAMES);
   if (
     wb.SheetNames.length !== expectedSheets.length ||
     !wb.SheetNames.every((name, index) => name === expectedSheets[index])

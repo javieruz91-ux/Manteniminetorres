@@ -72,7 +72,7 @@ describe('maintenance business rules', () => {
       { id: ids, now: () => '2026-01-03T03:04:05.000Z' },
     );
     expect(visit.lifecycleStatus).toBe('BORRADOR');
-    expect(visit.sections).toHaveLength(6);
+    expect(visit.sections).toHaveLength(10);
     expect(continued.siteName).toBe('Sitio actualizado');
     expect(continued.operationId).not.toBe(visit.operationId);
     expect(continued.syncStatus).toBe('PENDIENTE');

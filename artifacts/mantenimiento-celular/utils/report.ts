@@ -10,6 +10,10 @@ import {
   getNokItems,
   getPhotoSlots,
   PHOTO_SLOT_COUNT,
+  CHECKLIST_REPORT_HEADERS,
+  SEGMENT_REPORT_HEADERS,
+  PHOTO_REPORT_HEADERS,
+  REPORT_WORKBOOK_SHEET_NAMES,
 } from './reportCore';
 
 export {

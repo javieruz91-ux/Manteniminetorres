@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
 import { CHECKLIST_SHEETS } from '../data/checklist';
-import { buildPDFHtml, buildXLSXWorkbook } from '../utils/reportCore';
+import {
+  buildPDFHtml,
+  buildXLSXWorkbook,
+  CHECKLIST_REPORT_HEADERS,
+  PHOTO_REPORT_HEADERS,
+  PHOTO_SLOT_COUNT,
+  REPORT_WORKBOOK_SHEET_NAMES,
+  SEGMENT_REPORT_HEADERS,
+} from '../utils/reportCore';
 import { createDraftVisit } from '../utils/maintenanceRules';
 import { Finding, Visit } from '../types';
 
@@ -51,13 +59,71 @@ describe('runtime report generation', () => {
     const workbook = buildXLSXWorkbook(reportVisit());
     const bytes = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
     const parsed = XLSX.read(bytes, { type: 'buffer' });
-    expect(parsed.SheetNames).toEqual([
-      'PRESENTACION',
-      ...CHECKLIST_SHEETS.map((sheet) => sheet.name),
-      'HOJA DE SEG',
-      'REPORTE FOTOGRAFICO',
-    ]);
+    expect(parsed.SheetNames).toEqual(REPORT_WORKBOOK_SHEET_NAMES);
     expect(parsed.SheetNames.length).toBe(CHECKLIST_SHEETS.length + 3);
+  });
+
+  it('preserves the ten-sheet catalog order, points, headers, and 16 slots', () => {
+    expect(CHECKLIST_SHEETS).toHaveLength(10);
+    expect(CHECKLIST_SHEETS.map((sheet) => sheet.name)).toEqual([
+      'ALARMAS DE FUERZA',
+      'PLANTA HUAWEI',
+      'INFRAESTRUCTURA',
+      'ELECTROMECANICA',
+      'TIERRAS',
+      'TRANSMISION',
+      'RADIOFRECUENCIA',
+      'ENERGIA SOLAR',
+      'SISTEMA DE SEGURIDAD',
+      'OBRA CIVIL',
+    ]);
+    expect(CHECKLIST_SHEETS[6].points).toEqual([
+      'Estado de antenas',
+      'Conectores y jumpers',
+      'Etiquetado de sectores',
+    ]);
+    expect(CHECKLIST_SHEETS[7].points).toEqual([
+      'Paneles solares',
+      'Controlador solar',
+      'Cableado solar',
+    ]);
+    expect(CHECKLIST_SHEETS[8].points).toEqual([
+      'CCTV y grabador',
+      'Control de acceso',
+      'Extintores y señalización',
+    ]);
+    expect(CHECKLIST_SHEETS[9].points).toEqual([
+      'Losa y drenajes',
+      'Canalizaciones',
+      'Limpieza del sitio',
+    ]);
+    expect(CHECKLIST_REPORT_HEADERS).toEqual([
+      'Punto',
+      'Estado',
+      'Hallazgo',
+      'Prioridad',
+      'Responsable',
+      'Fecha Compromiso',
+    ]);
+    expect(SEGMENT_REPORT_HEADERS).toEqual([
+      'Hoja',
+      'Punto',
+      'A quien corresponde',
+      'Descripción',
+      'Fecha de inicio',
+      'Fecha realizado OK',
+    ]);
+    expect(PHOTO_REPORT_HEADERS).toEqual([
+      'Espacio',
+      'Hoja',
+      'Punto',
+      'Observaciones',
+      'Estado',
+      'Tipo de evidencia',
+      'Estado de Subida',
+      'Ruta de Archivo',
+    ]);
+    expect(PHOTO_SLOT_COUNT).toBe(16);
   });
 
   it('keeps PDF overflow evidence when there are more than 16 photos', async () => {
