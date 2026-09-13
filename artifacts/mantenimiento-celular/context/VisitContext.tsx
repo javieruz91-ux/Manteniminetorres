@@ -23,6 +23,9 @@ import {
   buildTemplateSyncSnapshot,
   getVisitConvenienceFields,
   buildStatusPointWire,
+  migrateVisitToCatalog,
+  sectionsForCatalog,
+  type LegacyVisit,
 } from '../utils/maintenanceRules';
 import { createDemoCatalog } from '@/lib/demoTemplate';
 
@@ -38,6 +41,7 @@ interface VisitContextValue {
   updatePointStatus: (visitId: string, sectionId: string, pointId: string, status: ChecklistStatus) => Promise<void>;
   saveFindingAndStatus: (visitId: string, pointId: string, sectionId: string, status: ChecklistStatus, finding: Finding | null) => Promise<void>;
   updateResponse: (visitId: string, fieldId: string, value: unknown) => Promise<void>;
+  migrateVisitToActiveTemplate: (visitId: string) => Promise<boolean>;
   getVisit: (id: string) => Visit | undefined;
   savePhoto: (tempUri: string, visitId: string, photoId?: string) => Promise<string>;
   triggerSync: () => void;
@@ -65,7 +69,9 @@ export function VisitProvider({ children }: { children: ReactNode }) {
   const isLocalMode = !isAuthenticated;
   const isDemoMode = !catalog;
   const demoCatalog = createDemoCatalog();
-  const effectiveFields = catalog?.fields ?? demoCatalog.fields;
+  const activeCatalogFields = catalog?.fields ?? [];
+  const fieldsForVisit = (visit: Visit): TemplateField[] =>
+    catalog?.fields ?? (visit.demoOnly ? demoCatalog.fields : []);
   
   const isHydrated = useRef(false);
   const currentNamespace = isLocalMode
@@ -332,7 +338,6 @@ export function VisitProvider({ children }: { children: ReactNode }) {
             // checklist.
             parsed = parsed.map(v => ({
               ...v,
-              templateFields: Array.isArray(v.templateFields) ? v.templateFields : [],
               responses: v.responses && typeof v.responses === 'object' ? v.responses : {},
             }));
           // Crash recovery: revert SINCRONIZANDO -> PENDIENTE, preserving exact operationId
@@ -371,6 +376,26 @@ export function VisitProvider({ children }: { children: ReactNode }) {
     loadVisits();
     return () => { isMounted = false; };
   }, [currentNamespace, fetchAndMergeServerVisits]);
+
+  // Replace legacy per-visit field snapshots with the active catalog once it is
+  // available. Responses, including keys no longer present in the new catalog,
+  // are deliberately preserved.
+  useEffect(() => {
+    if (!catalog?.fields.length || !isHydrated.current) return;
+    const pin = {
+      id: catalog.descriptor.id,
+      version: catalog.descriptor.version,
+      hash: catalog.descriptor.hash,
+    };
+    void updateAndPersist(prev => prev.map(current => {
+      const result = migrateVisitToCatalog(
+        current as LegacyVisit,
+        catalog.fields,
+        pin,
+      );
+      return result.visit;
+    }));
+  }, [catalog?.descriptor.hash, catalog?.descriptor.id, catalog?.descriptor.version, catalog?.fields, isLoading, updateAndPersist]);
 
   // Guest adoption
   useEffect(() => {
@@ -451,7 +476,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
             hash: catalog.descriptor.hash,
           }
         : undefined,
-       templateFields: effectiveFields,
+       templateFields: activeCatalogFields,
     }, {
       id: () => Crypto.randomUUID(),
       now: () => new Date().toISOString(),
@@ -460,6 +485,22 @@ export function VisitProvider({ children }: { children: ReactNode }) {
     
     await updateAndPersist(prev => [newVisit, ...prev]);
     return newVisit.id;
+  };
+
+  const migrateVisitToActiveTemplate = async (visitId: string): Promise<boolean> => {
+    if (!catalog) throw new Error('Primero carga una plantilla Excel activa.');
+    let changed = false;
+    await updateAndPersist(prev => prev.map(current => {
+      if (current.id !== visitId) return current;
+      const result = migrateVisitToCatalog(current as LegacyVisit, catalog.fields, {
+        id: catalog.descriptor.id,
+        version: catalog.descriptor.version,
+        hash: catalog.descriptor.hash,
+      });
+      changed = result.changed;
+      return result.visit;
+    }));
+    return changed;
   };
 
   const resetDemoData = async (): Promise<string> => {
@@ -524,7 +565,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
               const responses = { ...v.responses, [fieldId]: value };
               return {
                 ...v,
-                ...getVisitConvenienceFields({ templateFields: v.templateFields, responses }),
+                ...getVisitConvenienceFields(v, fieldsForVisit(v)),
                 responses,
                 clientUpdatedAt: new Date().toISOString(),
                 operationId: Crypto.randomUUID(),
@@ -543,7 +584,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       const closed = closeVisitRules(existing, auditEvent, {
         id: () => Crypto.randomUUID(),
         now: () => new Date().toISOString(),
-      });
+      }, fieldsForVisit(existing));
       return prev.map(v => v.id === id ? closed : v);
     });
   };
@@ -801,7 +842,8 @@ export function VisitProvider({ children }: { children: ReactNode }) {
         }
 
         const currentV = latestV;
-        const convenience = getVisitConvenienceFields(currentV);
+        const visitFields = fieldsForVisit(currentV);
+        const convenience = getVisitConvenienceFields(currentV, visitFields);
         const photos: VisitPhoto[] = currentV.findings.flatMap(f =>
           f.photos.map(p => ({
             visitId: currentV.id,
@@ -838,7 +880,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
             points: s.points.map(pt => {
               const wirePoint = buildStatusPointWire(
                 pt,
-                currentV.templateFields,
+                visitFields,
                 currentV.responses ?? {},
               );
               return {
@@ -871,7 +913,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
             metadata: a.metadata,
           })),
           photos,
-          ...buildTemplateSyncSnapshot(currentV),
+          ...buildTemplateSyncSnapshot(currentV, visitFields),
           responses: currentV.responses as Record<string, string | number | boolean | null>,
         };
 
@@ -977,6 +1019,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       updatePointStatus,
       saveFindingAndStatus,
       updateResponse,
+      migrateVisitToActiveTemplate,
       getVisit,
       savePhoto,
       triggerSync,
@@ -1059,16 +1102,13 @@ function mapSnapshotToLocal(
     closedAt: sv.closedAt,
     reopenedAt: sv.reopenedAt,
     serverVersion: sv.serverVersion,
-    sections: sv.sections.map(s => ({
-      id: s.id,
-      name: s.name,
-      title: s.title,
-      status: s.status as ChecklistStatus,
-      points: s.points.map(p => ({
-        id: p.id,
-        title: p.title,
-        status: p.status as ChecklistStatus,
-      }))
+    sections: sectionsForCatalog(
+      fallbackTemplateFields.length ? fallbackTemplateFields : remoteTemplateFields,
+      restoredResponses,
+    ).map(section => ({
+      ...section,
+      status: (sv.sections.find(candidate => candidate.id === section.id)?.status ??
+        section.status) as ChecklistStatus,
     })),
     template: remoteTemplate
       ? {
@@ -1077,7 +1117,6 @@ function mapSnapshotToLocal(
           hash: remoteTemplate.hash || remoteTemplate.sha256 || '',
         }
       : undefined,
-    templateFields: remoteTemplateFields,
     responses: restoredResponses,
     findings,
     auditEvents: sv.auditEvents.map(a => ({

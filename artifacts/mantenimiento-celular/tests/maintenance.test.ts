@@ -11,6 +11,7 @@ import {
   retryDelayMs,
   saveFindingAndStatus,
   setPointStatus,
+  migrateVisitToCatalog,
 } from '../utils/maintenanceRules';
 import {
   buildTemplateMappingsPatch,
@@ -110,7 +111,7 @@ describe('dynamic template maintenance rules', () => {
       'observation-1': 'Sin novedades',
     });
     expect(createDraftVisit().sections).toEqual([]);
-    expect(createDraftVisit().templateFields).toEqual([]);
+    expect(createDraftVisit().responses).toEqual({});
   });
 
   it('serializes and restores the exact pinned template, fields and every typed response', () => {
@@ -128,7 +129,7 @@ describe('dynamic template maintenance rules', () => {
         'observation-1': 'Sin novedades',
       },
     };
-    const restored = JSON.parse(JSON.stringify(buildTemplateSyncSnapshot(filled)));
+    const restored = JSON.parse(JSON.stringify(buildTemplateSyncSnapshot(filled, importedFields)));
     expect(restored.template).toEqual({ version: 3, sha256: template().hash });
     expect(restored.templateFields).toHaveLength(importedFields.length);
     expect(restored.templateFields.map((field: { id: string }) => field.id)).toEqual(importedFields.map(field => field.id));
@@ -169,12 +170,12 @@ describe('dynamic template maintenance rules', () => {
 
   it('requires imported required fields and a finding/photo for NOK before close', () => {
     let visit = allStatusPoints(draft(), 'NOK');
-    expect(getCloseEligibility(visit).eligible).toBe(false);
-    expect(getCloseEligibility(visit).missingItems.join('\n')).toContain('Falta hallazgo');
+    expect(getCloseEligibility(visit, importedFields).eligible).toBe(false);
+    expect(getCloseEligibility(visit, importedFields).missingItems.join('\n')).toContain('Falta hallazgo');
     visit = saveFindingAndStatus(visit, visit.sections[0].id, 'status-1', 'NOK', finding(visit), { id: ids, now });
-    expect(getCloseEligibility(visit).eligible).toBe(true);
+    expect(getCloseEligibility(visit, importedFields).eligible).toBe(true);
     visit = { ...visit, responses: { ...visit.responses, 'text-1': '' } };
-    expect(getCloseEligibility(visit).missingItems.join('\n')).toContain('Campo requerido');
+    expect(getCloseEligibility(visit, importedFields).missingItems.join('\n')).toContain('Campo requerido');
   });
 
   it('allows a clearly local demo visit to close without a real workbook', () => {
@@ -193,8 +194,22 @@ describe('dynamic template maintenance rules', () => {
     expect(visit.findings).toHaveLength(1);
     visit = setPointStatus(visit, nokDraft.sections[0].id, 'status-1', 'OK', { id: ids, now });
     expect(visit.findings).toHaveLength(0);
-    const closed = closeVisit(allStatusPoints(draft()), { id: 'close', eventType: 'CLOSE_VISIT', occurredAt: now() }, { id: ids, now });
+    const closed = closeVisit(allStatusPoints(draft()), { id: 'close', eventType: 'CLOSE_VISIT', occurredAt: now() }, { id: ids, now }, importedFields);
     expect(closed.lifecycleStatus).toBe('CERRADA');
+  });
+
+  it('migrates a partial legacy visit without losing responses', () => {
+    const legacy = {
+      ...draft(),
+      templateFields: importedFields.slice(0, 3),
+      responses: { 'text-1': 'Conservada', 'legacy-key': 'No se elimina' },
+    };
+    const result = migrateVisitToCatalog(legacy, importedFields, template());
+    expect(result.changed).toBe(true);
+    expect((result.visit as Visit & { templateFields?: TemplateField[] }).templateFields).toBeUndefined();
+    expect(result.visit.responses['text-1']).toBe('Conservada');
+    expect(result.visit.responses['legacy-key']).toBe('No se elimina');
+    expect(Object.keys(result.visit.responses)).toHaveLength(importedFields.length + 1);
   });
 
   it('blocks export without a pinned ready template or with unresolved audit cells', () => {

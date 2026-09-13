@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, SectionList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,6 +11,9 @@ import { Input } from '@/components/Input';
 import { PhotoPicker } from '@/components/PhotoPicker';
 import type { ChecklistStatus, Finding, Photo, TemplateField } from '@/types';
 import * as Crypto from 'expo-crypto';
+import { useTemplate } from '@/context/TemplateContext';
+import { createDemoCatalog } from '@/lib/demoTemplate';
+import { getLogicalEditableFields } from '@/utils/templateFields';
 
 const statusOptions: Array<{ value: ChecklistStatus; label: string; icon: any }> = [
   { value: 'OK', label: 'OK', icon: 'check' },
@@ -21,7 +24,15 @@ const statusOptions: Array<{ value: ChecklistStatus; label: string; icon: any }>
 
 export default function VisitDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { getVisit, updateResponse, updatePointStatus, saveFindingAndStatus, savePhoto } = useVisits();
+  const {
+    getVisit,
+    updateResponse,
+    updatePointStatus,
+    saveFindingAndStatus,
+    savePhoto,
+    migrateVisitToActiveTemplate,
+  } = useVisits();
+  const { catalog } = useTemplate();
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -29,29 +40,32 @@ export default function VisitDetailScreen() {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   const visit = getVisit(id);
 
-  const fields = visit?.templateFields ?? [];
+  const fields = catalog?.fields ?? (visit?.demoOnly ? createDemoCatalog().fields : []);
+  const editableFields = getLogicalEditableFields(fields);
   const visibleFields = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
-    if (!query) return fields;
-    return fields.filter(field =>
+    if (!query) return editableFields;
+    return editableFields.filter(field =>
       [field.label, field.fullText, field.sheet, field.section, field.subsection]
         .filter(Boolean)
         .some(value => String(value).toLocaleLowerCase().includes(query)),
     );
-  }, [fields, search]);
-  const groups = useMemo(() => {
+  }, [editableFields, search]);
+  const sections = useMemo(() => {
     const grouped = new Map<string, TemplateField[]>();
     for (const field of visibleFields) {
       const key = `${field.sheet}\u0000${field.section || field.sheet}\u0000${field.subsection || ''}`;
       grouped.set(key, [...(grouped.get(key) || []), field]);
     }
-    return [...grouped.entries()];
+    return [...grouped.entries()].map(([key, data]) => {
+      const [sheet, section, subsection] = key.split('\u0000');
+      return { key, sheet, section, subsection, data };
+    });
   }, [visibleFields]);
 
   if (!visit) {
     return <View style={[styles.center, { backgroundColor: colors.background }]}><Text style={{ color: colors.foreground }}>Visita no encontrada</Text></View>;
   }
-  const editableFields = fields.filter(field => !field.isTitle && field.editable !== false);
   const completed = editableFields.filter(field => {
     if (field.type === 'status') {
       return visit.sections.some(section => section.points.some(point => point.id === field.id && point.status !== 'PENDING'));
@@ -61,6 +75,16 @@ export default function VisitDetailScreen() {
   }).length;
   const progress = editableFields.length ? completed / editableFields.length : 0;
   const isReadOnly = visit.lifecycleStatus === 'CERRADA';
+  const duplicateEditableIds = new Set(editableFields.map(field => field.id)).size !== editableFields.length;
+  const integrityError = !catalog && !visit.demoOnly
+    ? 'No hay una plantilla activa para esta visita.'
+    : catalog && catalog.descriptor.fields !== fields.length
+      ? `El catálogo declara ${catalog.descriptor.fields} campos y cargó ${fields.length}.`
+      : duplicateEditableIds
+        ? 'La plantilla contiene campos editables duplicados.'
+    : !search.trim() && visibleFields.length !== editableFields.length
+      ? `La captura muestra ${visibleFields.length} de ${editableFields.length} campos editables.`
+      : null;
 
   const setValue = (field: TemplateField, value: unknown) => {
     if (!isReadOnly) void updateResponse(visit.id, field.id, value);
@@ -125,14 +149,105 @@ export default function VisitDetailScreen() {
     );
   };
 
+  const handleMigrate = async () => {
+    try {
+      await migrateVisitToActiveTemplate(visit.id);
+      Alert.alert('Visita actualizada', 'Se conservaron tus respuestas y ahora se muestra la plantilla completa.');
+    } catch (error) {
+      Alert.alert('No se pudo actualizar', error instanceof Error ? error.message : 'Carga primero la plantilla activa.');
+    }
+  };
+
+  const renderField = (field: TemplateField) => {
+    const owner = visit.sections.find(candidate => candidate.points.some(point => point.id === field.id));
+    const finding = visit.findings.find(candidate => candidate.pointId === field.id);
+    return (
+      <FieldRenderer
+        field={field}
+        value={visit.responses[field.id]}
+        status={statusFor(field.id)}
+        finding={finding}
+        readOnly={isReadOnly}
+        colors={colors}
+        onValue={(value: unknown) => setValue(field, value)}
+        onStatus={(nextStatus: ChecklistStatus) => void chooseStatus(field, nextStatus)}
+        onFinding={async (nextFinding: Finding) => {
+          if (owner) await saveFindingAndStatus(visit.id, field.id, owner.id, 'NOK', nextFinding);
+        }}
+        onPhoto={async (photo: Photo) => {
+          if (!owner || !finding) return;
+          const storedUri = await savePhoto(photo.uri, visit.id, photo.id);
+          await saveFindingAndStatus(visit.id, field.id, owner.id, 'NOK', {
+            ...finding,
+            photos: [...finding.photos, { ...photo, uri: storedUri }],
+          });
+        }}
+        onRemovePhoto={async (photoId: string) => {
+          if (!owner || !finding) return;
+          await saveFindingAndStatus(visit.id, field.id, owner.id, 'NOK', {
+            ...finding,
+            photos: finding.photos.filter(photo => photo.id !== photoId),
+          });
+        }}
+        hasFinding={Boolean(finding)}
+      />
+    );
+  };
+
+  const sectionHeader = ({ section }: { section: typeof sections[number] }) => {
+    const sectionCompleted = section.data.filter(field => {
+      if (field.type === 'status') return statusFor(field.id) !== 'PENDING';
+      const value = visit.responses[field.id];
+      return value !== undefined && value !== null && String(value).trim() !== '';
+    }).length;
+    const expanded = expandedSections[section.key] ?? true;
+    return (
+      <TouchableOpacity
+        onPress={() => setExpandedSections(previous => ({ ...previous, [section.key]: !expanded }))}
+        style={[styles.sectionHeader, { backgroundColor: colors.card }]}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.groupTitle, { color: colors.foreground }]}>{section.sheet}</Text>
+          <Text style={[styles.groupSubtitle, { color: colors.mutedForeground }]}>
+            {section.section}{section.subsection ? ` · ${section.subsection}` : ''} · {sectionCompleted}/{section.data.length}
+          </Text>
+        </View>
+        <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={22} color={colors.mutedForeground} />
+      </TouchableOpacity>
+    );
+  };
+
+  const listSections = sections.map(section => ({
+    ...section,
+    data: expandedSections[section.key] === false ? [] : section.data,
+  }));
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
-      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 36) }]}>
-        {!visit.template && (
+      <SectionList
+        sections={listSections}
+        keyExtractor={field => field.id}
+        renderSectionHeader={sectionHeader}
+        renderItem={({ item }) => <View style={styles.fieldRow}>{renderField(item)}</View>}
+        stickySectionHeadersEnabled={false}
+        contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 36) }]}
+        ListHeaderComponent={
+          <View>
+        {!visit.template && !visit.demoOnly && (
           <Card style={[styles.card, { borderColor: colors.destructive, borderWidth: 1 }]}>
             <Text style={[styles.missing, { color: colors.destructive }]}>Falta cargar la plantilla Excel original</Text>
-            <Text style={{ color: colors.mutedForeground }}>Esta visita no tiene un catálogo importado y no puede evaluarse ni exportarse.</Text>
-            <Button title="Configurar plantilla" onPress={() => router.push('/settings/template')} variant="outline" />
+            <Text style={{ color: colors.mutedForeground }}>Carga la plantilla activa para actualizar esta visita.</Text>
+          </Card>
+        )}
+        {visit.catalogMigrationNotice && (
+          <Card style={[styles.notice, { borderColor: colors.primary, backgroundColor: colors.card }]}>
+            <Feather name="refresh-cw" size={18} color={colors.primary} />
+            <View style={{ flex: 1, gap: 8 }}>
+              <Text style={{ color: colors.foreground }}>{visit.catalogMigrationNotice}</Text>
+              {catalog && (
+                <Button title="Actualizar esta visita con la plantilla completa" variant="outline" onPress={() => void handleMigrate()} />
+              )}
+            </View>
           </Card>
         )}
         <Card style={styles.card}>
@@ -143,7 +258,7 @@ export default function VisitDetailScreen() {
                 Completa los datos generales y continúa con el checklist.
               </Text>
               <Text style={{ color: colors.mutedForeground }}>
-                {visit.template ? `Plantilla ${visit.template.version} · ${visit.template.hash.slice(0, 12)}` : 'Sin plantilla fijada'}
+                {visit.template ? `Plantilla ${catalog?.descriptor.fileName || 'activa'} · v${visit.template.version}` : 'Sin plantilla fijada'}
               </Text>
             </View>
             {isReadOnly && <Text style={{ color: colors.warning }}>Solo lectura</Text>}
@@ -163,71 +278,21 @@ export default function VisitDetailScreen() {
           <View style={[styles.progressBg, { backgroundColor: colors.muted }]}>
             <View style={[styles.progressFill, { width: `${progress * 100}%`, backgroundColor: colors.primary }]} />
           </View>
+          <View style={[styles.integrity, { borderColor: integrityError ? colors.destructive : colors.border }]}>
+            <Text style={{ color: colors.foreground, fontFamily: 'Inter_600SemiBold' }}>
+              Catálogo: {catalog?.descriptor.fileName || (visit.demoOnly ? 'Demostración local' : 'No disponible')} · v{catalog?.descriptor.version || visit.template?.version || '—'}
+            </Text>
+            <Text style={{ color: colors.mutedForeground }}>
+              Editables: {editableFields.length} · Mostrados: {visibleFields.length} · Respondidos: {completed}
+            </Text>
+            {integrityError && <Text style={{ color: colors.destructive, marginTop: 4 }}>{integrityError}</Text>}
+          </View>
         </Card>
-
-        {fields.length === 0 ? (
-          <Card style={styles.card}><Text style={{ color: colors.mutedForeground }}>No hay campos importados para esta visita.</Text></Card>
-        ) : groups.length === 0 ? (
-          <Card style={styles.card}><Text style={{ color: colors.mutedForeground }}>No hay resultados para la búsqueda.</Text></Card>
-        ) : groups.map(([key, group]) => {
-          const [sheet, section, subsection] = key.split('\u0000');
-          const sectionId = `${sheet}:${section}:${subsection}`;
-          const expanded = expandedSections[sectionId] ?? true;
-          return (
-            <Card key={key} style={styles.card}>
-              <TouchableOpacity
-                onPress={() => setExpandedSections(previous => ({ ...previous, [sectionId]: !expanded }))}
-                style={styles.sectionHeader}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.groupTitle, { color: colors.foreground }]}>{sheet}</Text>
-                  <Text style={[styles.groupSubtitle, { color: colors.mutedForeground }]}>
-                    {section}{subsection ? ` · ${subsection}` : ''}
-                  </Text>
-                </View>
-                <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={22} color={colors.mutedForeground} />
-              </TouchableOpacity>
-              {expanded && group.map(field => {
-                const owner = visit.sections.find(candidate => candidate.points.some(point => point.id === field.id));
-                const finding = visit.findings.find(candidate => candidate.pointId === field.id);
-                return (
-                  <FieldRenderer
-                    key={field.id}
-                    field={field}
-                    value={visit.responses[field.id]}
-                    status={statusFor(field.id)}
-                    finding={finding}
-                    sectionId={owner?.id}
-                    readOnly={isReadOnly}
-                    colors={colors}
-                    onValue={(value: unknown) => setValue(field, value)}
-                    onStatus={(nextStatus: ChecklistStatus) => void chooseStatus(field, nextStatus)}
-                    onFinding={async (nextFinding: Finding) => {
-                      if (owner) await saveFindingAndStatus(visit.id, field.id, owner.id, 'NOK', nextFinding);
-                    }}
-                    onPhoto={async (photo: Photo) => {
-                      if (!owner || !finding) return;
-                      const storedUri = await savePhoto(photo.uri, visit.id, photo.id);
-                      await saveFindingAndStatus(visit.id, field.id, owner.id, 'NOK', {
-                        ...finding,
-                        photos: [...finding.photos, { ...photo, uri: storedUri }],
-                      });
-                    }}
-                    onRemovePhoto={async (photoId: string) => {
-                      if (!owner || !finding) return;
-                      await saveFindingAndStatus(visit.id, field.id, owner.id, 'NOK', {
-                        ...finding,
-                        photos: finding.photos.filter(photo => photo.id !== photoId),
-                      });
-                    }}
-                    hasFinding={Boolean(finding)}
-                  />
-                );
-              })}
-            </Card>
-          );
-        })}
-
+          </View>
+        }
+        ListEmptyComponent={<Card style={styles.card}><Text style={{ color: colors.mutedForeground }}>No hay campos editables para mostrar.</Text></Card>}
+        ListFooterComponent={
+          <View style={{ gap: 16 }}>
         <Button
           title="Marcar restantes como OK"
           variant="outline"
@@ -254,7 +319,9 @@ export default function VisitDetailScreen() {
           <Button title={`Hallazgos (${visit.findings.length})`} variant="secondary" style={{ flex: 1 }} icon={<Feather name="alert-triangle" size={18} color={colors.foreground} />} onPress={() => router.push(`/visit/${visit.id}/findings`)} />
           <Button title="Siguiente: revisar" style={{ flex: 1 }} icon={<Feather name="arrow-right" size={18} color="#FFF" />} onPress={() => router.push(`/visit/${visit.id}/summary`)} />
         </View>
-      </ScrollView>
+          </View>
+        }
+      />
     </View>
   );
 }
@@ -447,7 +514,10 @@ const styles = StyleSheet.create({
   status: { borderWidth: 1, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 5 },
   choice: { borderWidth: 1, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12 },
   actionRow: { flexDirection: 'row', gap: 12 },
+  fieldRow: { paddingHorizontal: 16, backgroundColor: 'transparent' },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 4 },
+  notice: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12 },
+  integrity: { marginTop: 12, padding: 10, borderWidth: 1, borderRadius: 8 },
   inlineFinding: { marginTop: 12, padding: 12, borderWidth: 1, borderRadius: 12, gap: 8 },
   inlineTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 },
   inlineLabel: { fontFamily: 'Inter_500Medium', marginTop: 4 },

@@ -35,6 +35,8 @@ export interface TemplateField {
   editable?: boolean;
   isTitle?: boolean;
   mapped?: boolean;
+  /** UI classification; presentation cells remain in the catalog for export but are not questions. */
+  logical?: boolean;
 }
 
 export interface TemplateUnmappedCell {
@@ -136,9 +138,7 @@ export interface Visit {
   sections: Section[];
   /** The exact catalog revision used to create this draft. */
   template?: VisitTemplatePin;
-  /** Offline copy of imported fields; never generated from the old demo checklist. */
-  templateFields: TemplateField[];
-  /** Values keyed by imported field id, including empty values. */
+  /** Values keyed by stable imported field id, including empty values. */
   responses: Record<string, unknown>;
   findings: Finding[];
   auditEvents: AuditEvent[];
@@ -150,4 +150,5 @@ export interface Visit {
   nextAttemptAt?: number;
   syncError?: string;
   demoOnly?: boolean;
+  catalogMigrationNotice?: string;
 }

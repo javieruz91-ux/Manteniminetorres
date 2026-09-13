@@ -27,6 +27,7 @@ const officialWorkbook = fileURLToPath(new URL("../../../attached_assets/Manteni
 const officialFixture = readFileSync(officialWorkbook);
 const officialCatalog = parseTemplate(officialFixture);
 assert.equal(officialCatalog.ready, false);
+assert.equal(officialCatalog.catalog.length, 1906);
 assert.equal(officialCatalog.unmapped.some((candidate) => candidate.target === "PLANTA HUAWEI!D8"), false);
 assert.ok(officialCatalog.catalog.some((field) => field.sheet === "PLANTA HUAWEI" && field.target === "PLANTA HUAWEI!D8" && field.responseType === "status"));
 assert.ok(officialCatalog.catalog.some((field) => field.sheet === "HOJA DE SEG"));
@@ -59,6 +60,17 @@ assert.deepEqual(EXPECTED_SHEETS, [
   ["base", 1, 1],
 ]);
 assert.equal(PHOTO_SLOT_COUNT, 16);
+
+// Check the beginning, middle, and end of every imported sheet. This catches
+// truncation that a total-count assertion alone would miss.
+for (const [sheet] of EXPECTED_SHEETS.slice(0, -1)) {
+  const fields = officialCatalog.catalog.filter((field) => field.sheet === sheet);
+  assert.ok(fields.length > 0, `sheet ${sheet} must have imported fields`);
+  for (const field of [fields[0], fields[Math.floor(fields.length / 2)], fields.at(-1)]) {
+    assert.ok(field.id && field.target, `${sheet} field must retain identity`);
+  }
+  assert.equal(new Set(fields.map((field) => field.id)).size, fields.length);
+}
 
 function crc32(data) {
   let crc = 0xffffffff;

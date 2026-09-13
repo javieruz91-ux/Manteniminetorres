@@ -8,6 +8,7 @@ import {
   Section,
   ChecklistPoint,
 } from '../types';
+import { stableTemplateFieldKey, templateFieldRef } from './templateFields';
 
 export interface DraftInput {
   siteId?: string;
@@ -21,6 +22,8 @@ export interface DraftInput {
   };
   templateFields?: TemplateField[];
 }
+
+export type LegacyVisit = Visit & { templateFields?: TemplateField[] };
 
 export interface DraftDependencies {
   now?: () => string;
@@ -54,7 +57,6 @@ export function createDraftVisit(
     reopenedAt: null,
     serverVersion: 0,
     template: data.template,
-    templateFields,
     responses: Object.fromEntries(templateFields.map(field => [field.id, ''])),
     sections: createImportedSections(templateFields),
     findings: [],
@@ -66,7 +68,7 @@ export function createDraftVisit(
 
 /**
  * Legacy Section/ChecklistPoint consumers only receive imported status fields.
- * Every other imported field is rendered from templateFields/responses.
+ * Every other imported field is rendered from the active catalog/responses.
  */
 export function createImportedSections(fields: TemplateField[]): Section[] {
   const grouped = new Map<string, TemplateField[]>();
@@ -97,7 +99,8 @@ export function createImportedSections(fields: TemplateField[]): Section[] {
 
 /** Stable, JSON-safe source-of-truth portion of a visit sync payload. */
 export function buildTemplateSyncSnapshot(
-  visit: Pick<Visit, 'template' | 'templateFields' | 'responses'>,
+  visit: Pick<Visit, 'template' | 'responses'>,
+  templateFields: TemplateField[],
 ): {
   template: { version: number; sha256: string };
   templateFields: Array<{
@@ -121,8 +124,8 @@ export function buildTemplateSyncSnapshot(
   if (!visit.template) throw new Error('Falta cargar la plantilla Excel original.');
   return {
     template: { version: Number(visit.template.version), sha256: visit.template.hash },
-    templateFields: (visit.templateFields ?? []).map(field => {
-      const ref = field.target?.cell || field.target?.range || '';
+    templateFields: templateFields.map(field => {
+      const ref = templateFieldRef(field);
       return {
         id: field.id,
         sheet: field.sheet,
@@ -170,9 +173,10 @@ export function buildStatusPointWire(
 
 /** Convenience metadata is derived from imported PRESENTACION responses only. */
 export function getVisitConvenienceFields(
-  visit: Pick<Visit, 'templateFields' | 'responses'>,
+  visit: Pick<Visit, 'responses'>,
+  templateFields: TemplateField[],
 ): Pick<Visit, 'siteId' | 'siteName' | 'workOrder' | 'technician'> {
-  const presentation = (visit.templateFields ?? []).filter(
+  const presentation = templateFields.filter(
     field => field.sheet.toUpperCase() === 'PRESENTACION',
   );
   const find = (patterns: RegExp[]): string => {
@@ -187,6 +191,67 @@ export function getVisitConvenienceFields(
     siteName: find([/nombre.*sitio/, /^sitio$/]),
     workOrder: find([/\bwo\b/, /orden.*trabajo/, /work.?order/]),
     technician: find([/ingenier/, /t[eé]cnic/, /responsable/]),
+  };
+}
+
+function sectionStatus(field: TemplateField, responses: Record<string, unknown>): ChecklistStatus {
+  const response = responses[field.id];
+  return ['PENDING', 'OK', 'NOK', 'SC', 'NA'].includes(String(response))
+    ? response as ChecklistStatus
+    : 'PENDING';
+}
+
+export function sectionsForCatalog(
+  fields: TemplateField[],
+  responses: Record<string, unknown>,
+): Section[] {
+  return createImportedSections(fields).map(section => ({
+    ...section,
+    points: section.points.map(point => ({
+      ...point,
+      status: sectionStatus(fields.find(field => field.id === point.id)!, responses),
+    })),
+  }));
+}
+
+export function migrateVisitToCatalog(
+  input: LegacyVisit,
+  fields: TemplateField[],
+  template: NonNullable<Visit['template']>,
+  now = () => new Date().toISOString(),
+): { visit: Visit; changed: boolean } {
+  const legacyFields = Array.isArray(input.templateFields) ? input.templateFields : [];
+  const sourceResponses = input.responses && typeof input.responses === 'object'
+    ? { ...input.responses }
+    : {};
+  const byStableKey = new Map(legacyFields.map(field => [stableTemplateFieldKey(field), field]));
+  const responses = { ...sourceResponses };
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(responses, field.id)) continue;
+    const legacy = byStableKey.get(stableTemplateFieldKey(field));
+    responses[field.id] = legacy && Object.prototype.hasOwnProperty.call(sourceResponses, legacy.id)
+      ? sourceResponses[legacy.id]
+      : '';
+  }
+  const next: Visit = {
+    ...input,
+    template,
+    responses,
+    sections: sectionsForCatalog(fields, responses),
+    clientUpdatedAt: input.template?.hash === template.hash && legacyFields.length === 0
+      ? input.clientUpdatedAt
+      : now(),
+    catalogMigrationNotice: input.template?.hash === template.hash && legacyFields.length === 0
+      ? input.catalogMigrationNotice
+      : 'Esta visita fue actualizada con la plantilla completa.',
+  };
+  const { templateFields: _legacyTemplateFields, ...withoutLegacyFields } = next as Visit & { templateFields?: TemplateField[] };
+  void _legacyTemplateFields;
+  return {
+    visit: withoutLegacyFields,
+    changed: legacyFields.length > 0 ||
+      input.template?.hash !== template.hash ||
+      fields.some(field => !Object.prototype.hasOwnProperty.call(sourceResponses, field.id)),
   };
 }
 
@@ -296,9 +361,8 @@ export interface CloseEligibility {
   missingItems: string[];
 }
 
-export function getCloseEligibility(visit: Visit): CloseEligibility {
+export function getCloseEligibility(visit: Visit, templateFields: TemplateField[] = []): CloseEligibility {
   const missingItems: string[] = [];
-  const templateFields = visit.templateFields ?? [];
   const responses = visit.responses ?? {};
   const hasTemplate = Boolean(
     visit.demoOnly || (visit.template?.id && templateFields.length > 0),
@@ -375,11 +439,12 @@ export function closeVisit(
   visit: Visit,
   auditEvent: AuditEvent,
   dependencies: DraftDependencies = {},
+  templateFields: TemplateField[] = [],
 ): Visit {
   if (!editableStatuses.has(visit.lifecycleStatus)) {
     throw new Error('Transición inválida: Solo visitas abiertas pueden ser cerradas.');
   }
-  if (!getCloseEligibility(visit).eligible) {
+  if (!getCloseEligibility(visit, templateFields).eligible) {
     throw new Error('La visita no cumple los requisitos para ser cerrada.');
   }
   const now = dependencies.now ?? (() => new Date().toISOString());

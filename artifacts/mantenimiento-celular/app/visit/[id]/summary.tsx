@@ -15,6 +15,8 @@ import { exportTemplate, exportTemplateLocally, getTemplateExportBlockReason } f
 import { useTemplate } from '@/context/TemplateContext';
 import { AuditEvent, Finding } from '@/types';
 import { getCloseEligibility } from '@/utils/maintenanceRules';
+import { createDemoCatalog } from '@/lib/demoTemplate';
+import { getLogicalEditableFields } from '@/utils/templateFields';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 
@@ -33,6 +35,20 @@ export default function SummaryScreen() {
 
   const visit = getVisit(id);
   if (!visit) return null;
+  const activeFields = catalog?.fields ?? (visit.demoOnly ? createDemoCatalog().fields : []);
+  const editableFields = getLogicalEditableFields(activeFields);
+  const respondedFieldCount = editableFields.filter(field =>
+    Object.prototype.hasOwnProperty.call(visit.responses || {}, field.id),
+  ).length;
+  const catalogIntegrityError = activeFields.length === 0
+    ? 'No hay una plantilla activa para esta visita.'
+    : catalog && catalog.descriptor.fields !== activeFields.length
+      ? `El catálogo declara ${catalog.descriptor.fields} campos y cargó ${activeFields.length}.`
+    : new Set(editableFields.map(field => field.id)).size !== editableFields.length
+      ? 'La plantilla contiene campos editables duplicados.'
+      : respondedFieldCount !== editableFields.length
+        ? `La visita conserva ${respondedFieldCount} respuestas para ${editableFields.length} campos editables.`
+        : null;
 
   // Exact Validations
   const {
@@ -41,7 +57,8 @@ export default function SummaryScreen() {
     allNokHaveFindings,
     missingItems,
     eligible: canClose,
-  } = getCloseEligibility(visit);
+  } = getCloseEligibility(visit, activeFields);
+  const canCloseSafely = canClose && !catalogIntegrityError;
   const isClosed = visit.lifecycleStatus === 'CERRADA';
   const reviewItems = visit.sections.flatMap(section =>
     section.points
@@ -65,7 +82,8 @@ export default function SummaryScreen() {
   };
 
   const handleCloseVisit = async () => {
-    if (!canClose) {
+    if (!canCloseSafely) {
+      if (catalogIntegrityError) missingItems.unshift(catalogIntegrityError);
       if (!isGeneralDataComplete) {
          missingItems.unshift("Datos generales del sitio incompletos.");
       }
@@ -182,7 +200,7 @@ export default function SummaryScreen() {
             contentBase64: sourceBase64,
             format,
             snapshot: visit,
-            fields: visit.templateFields.map(field => ({
+            fields: activeFields.map(field => ({
               id: field.id,
               sheet: field.sheet,
               subsection: field.subsection || field.section,
@@ -355,8 +373,8 @@ export default function SummaryScreen() {
             title="Finalizar y generar reporte"
             size="lg"
             onPress={handleCloseVisit}
-            disabled={!canClose}
-            icon={<Feather name="lock" size={20} color={!canClose ? colors.mutedForeground : "#FFF"} />}
+            disabled={!canCloseSafely}
+            icon={<Feather name="lock" size={20} color={!canCloseSafely ? colors.mutedForeground : "#FFF"} />}
             style={{ marginTop: 20 }}
           />
         )}

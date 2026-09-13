@@ -17,11 +17,13 @@ import { exportBlankTemplate } from '@/lib/templateApi';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { MIME_XLSX } from '@/lib/templateApi';
+import { createDemoCatalog } from '@/lib/demoTemplate';
 
 export default function DashboardScreen() {
   const { visits, createVisit, isOnline, isDemoMode, resetDemoData } = useVisits();
   const { user, login, logout, isAuthenticated } = useAuth();
   const { catalog, isLoading: templateLoading, uploadLocal } = useTemplate();
+  const demoFields = React.useMemo(() => createDemoCatalog().fields, []);
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -206,7 +208,10 @@ export default function DashboardScreen() {
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={renderEmpty}
         renderItem={({ item }) => {
-          const convenience = getVisitConvenienceFields(item);
+          const convenience = getVisitConvenienceFields(
+            item,
+            catalog?.fields ?? (item.demoOnly ? demoFields : []),
+          );
           return (
           <TouchableOpacity onPress={() => router.push(`/visit/${item.id}`)} activeOpacity={0.7}>
             <Card style={styles.visitCard}>
