@@ -40,7 +40,7 @@ export default function SummaryScreen() {
   const editableFields = getLogicalEditableFields(activeFields);
   const realQuestions = catalogQuestions(activeFields);
   const respondedQuestionCount = realQuestions.filter(question =>
-    Object.prototype.hasOwnProperty.call(visit.responses || {}, field.id),
+    Object.prototype.hasOwnProperty.call(visit.responses || {}, question.field.id),
   ).length;
   const catalogIntegrityError = activeFields.length === 0
     ? 'No hay una plantilla activa para esta visita.'
