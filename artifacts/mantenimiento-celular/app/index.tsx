@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Platform } from 'react-native';
 import { useVisits } from '@/context/VisitContext';
 import { useAuth } from '@/lib/auth';
 import { useColors } from '@/hooks/useColors';
@@ -40,9 +40,19 @@ export default function DashboardScreen() {
       });
       if (result.canceled || !result.assets[0]) return;
       const asset = result.assets[0];
-      const contentBase64 = await FileSystem.readAsStringAsync(asset.uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      const browserFile = (asset as typeof asset & { file?: File }).file;
+      const contentBase64 = browserFile
+        ? await (async () => {
+            const bytes = new Uint8Array(await browserFile.arrayBuffer());
+            let binary = '';
+            bytes.forEach(byte => {
+              binary += String.fromCharCode(byte);
+            });
+            return btoa(binary);
+          })()
+        : await FileSystem.readAsStringAsync(asset.uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
       await uploadLocal({
         fileName: asset.name || 'mi_formato.xlsx',
         contentBase64,
@@ -303,7 +313,7 @@ export default function DashboardScreen() {
         {catalog && (
           <Button
             testID="btn-start-visit"
-            title="Nueva visita"
+            title={Platform.OS === 'web' ? 'Iniciar visita de prueba' : 'Nueva visita'}
             icon={<Feather name="plus" size={20} color="#FFF" />}
             onPress={handleStartVisit}
             size="lg"

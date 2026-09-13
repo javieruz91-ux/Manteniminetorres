@@ -2,8 +2,8 @@
  * Standalone production server for Expo static builds.
  *
  * Serves the output of build.js (static-build/) with two special routes:
- * - GET / or /manifest with expo-platform header → platform manifest JSON
- * - GET / without expo-platform → landing page HTML
+ * - GET /manifest with expo-platform header → platform manifest JSON
+ * - GET / without expo-platform → the Expo web export and SPA fallback
  * Everything else falls through to static file serving from ./static-build/.
  *
  * Zero external dependencies — uses only Node.js built-ins (http, fs, path).
@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 
 const STATIC_ROOT = path.resolve(__dirname, '..', 'static-build');
+const WEB_ROOT = path.join(STATIC_ROOT, 'web');
 const TEMPLATE_PATH = path.resolve(__dirname, 'templates', 'landing-page.html');
 const basePath = (process.env.BASE_PATH || '/').replace(/\/+$/, '');
 
@@ -33,6 +34,7 @@ const MIME_TYPES = {
   '.ttf': 'font/ttf',
   '.otf': 'font/otf',
   '.map': 'application/json',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
 
 function getAppName() {
@@ -101,13 +103,27 @@ function serveLandingPage(req, res, landingPageTemplate, appName) {
 }
 
 function serveStaticFile(urlPath, res) {
-  const safePath = path.normalize(urlPath).replace(/^(\.\.(\/|\\|$))+/, '');
-  const filePath = path.join(STATIC_ROOT, safePath);
+  return serveFileFromRoot(STATIC_ROOT, urlPath, res, false);
+}
 
-  if (!filePath.startsWith(STATIC_ROOT)) {
+function serveWebFile(urlPath, res) {
+  return serveFileFromRoot(WEB_ROOT, urlPath, res, true);
+}
+
+function serveFileFromRoot(root, urlPath, res, spaFallback) {
+  const safePath = path.normalize(urlPath).replace(/^(\.\.(\/|\\|$))+/, '');
+  let filePath = path.join(root, safePath);
+
+  if (!filePath.startsWith(root)) {
     res.writeHead(403);
     res.end('Forbidden');
     return;
+  }
+
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {
+    filePath = path.join(filePath, 'index.html');
+  } else if (!fs.existsSync(filePath) && spaFallback && !path.extname(filePath)) {
+    filePath = path.join(root, 'index.html');
   }
 
   if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
@@ -141,8 +157,19 @@ const server = http.createServer((req, res) => {
     }
 
     if (pathname === '/') {
+      if (fs.existsSync(path.join(WEB_ROOT, 'index.html'))) {
+        return serveWebFile(pathname, res);
+      }
       return serveLandingPage(req, res, landingPageTemplate, appName);
     }
+  }
+
+  if (pathname.startsWith('/api')) {
+    return serveStaticFile(pathname, res);
+  }
+
+  if (fs.existsSync(path.join(WEB_ROOT, 'index.html'))) {
+    return serveWebFile(pathname, res);
   }
 
   serveStaticFile(pathname, res);

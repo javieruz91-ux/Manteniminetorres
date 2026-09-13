@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Platform } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import * as ImagePicker from 'expo-image-picker';
 import { Photo, PhotoType } from '@/types';
@@ -20,16 +20,24 @@ export function PhotoPicker({ photos, onAdd, onRemove, type, label, disabled = f
 
   const handlePick = async () => {
     if (disabled) return;
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      alert('Se requiere acceso a la cámara.');
-      return;
+    let result: ImagePicker.ImagePickerResult;
+    if (Platform.OS === 'web') {
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.7,
+        allowsMultipleSelection: false,
+      });
+    } else {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        alert('Se requiere acceso a la cámara.');
+        return;
+      }
+      result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.7,
+      });
     }
-
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.7,
-    });
 
     if (!result.canceled && result.assets[0]) {
       onAdd({

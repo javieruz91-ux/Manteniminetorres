@@ -204,6 +204,10 @@ function unwrapCatalog(value: any): TemplateCatalog | null {
   return { descriptor: result, fields: normalizedFields };
 }
 
+export function normalizeTemplateCatalog(value: unknown): TemplateCatalog | null {
+  return unwrapCatalog(value);
+}
+
 export async function getTemplate(): Promise<TemplateCatalog | null> {
   let value: any;
   try {

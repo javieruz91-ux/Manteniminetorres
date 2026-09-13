@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import {
   ExportTemplateBody,
   ExportTemplateResponse,
@@ -74,6 +76,46 @@ async function current(ownerId: string) {
     .orderBy(desc(excelTemplatesTable.version)).limit(1);
   return row;
 }
+
+function findOfficialWorkbook(): { fileName: string; filePath: string } | null {
+  let directory = process.cwd();
+  while (true) {
+    const assetsDirectory = path.join(directory, "attached_assets");
+    if (fs.existsSync(assetsDirectory)) {
+      const fileName = fs.readdirSync(assetsDirectory)
+        .find((candidate) => candidate.toLowerCase().endsWith(".xlsx"));
+      if (fileName) {
+        return { fileName, filePath: path.join(assetsDirectory, fileName) };
+      }
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+
+router.get("/templates/trial-local", (_req, res) => {
+  const workbook = findOfficialWorkbook();
+  if (!workbook) {
+    res.status(404).json({ error: NOT_LOADED });
+    return;
+  }
+  try {
+    const bytes = fs.readFileSync(workbook.filePath);
+    const parsed = resolveLocalSeparators(parseTemplate(bytes));
+    res.json({
+      ...localDescriptor(workbook.fileName, bytes, parsed),
+      source: {
+        fileName: workbook.fileName,
+        contentBase64: bytes.toString("base64"),
+      },
+    });
+  } catch (error) {
+    res.status(422).json({
+      error: error instanceof Error ? error.message : "No se pudo leer el XLSX oficial.",
+    });
+  }
+});
 
 router.get("/templates/current", async (req, res) => {
   if (!authenticated(req, res)) return;

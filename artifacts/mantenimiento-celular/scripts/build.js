@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { spawnSync } = require('child_process');
 const net = require('net');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
@@ -97,6 +98,51 @@ function prepareDirectories(timestamp) {
   }
 
   console.log('Build:', timestamp);
+}
+
+function exportWebBundle(expoPublicDomain, expoPublicReplId) {
+  const webOutput = path.join(projectRoot, 'static-build', 'web');
+  console.log('Exporting web bundle...');
+  const result = spawnSync(
+    'pnpm',
+    [
+      'exec',
+      'expo',
+      'export',
+      '--platform',
+      'web',
+      '--output-dir',
+      webOutput,
+    ],
+    {
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        EXPO_PUBLIC_DOMAIN: expoPublicDomain,
+        EXPO_PUBLIC_REPL_ID: expoPublicReplId || '',
+      },
+      stdio: 'inherit',
+    },
+  );
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`Web export failed with exit code ${result.status}`);
+  }
+
+  const officialTemplate = fs.readdirSync(path.join(workspaceRoot, 'attached_assets'))
+    .find((fileName) => fileName.toLowerCase().endsWith('.xlsx'));
+  if (!officialTemplate) {
+    throw new Error('No official XLSX was found in attached_assets');
+  }
+
+  fs.copyFileSync(
+    path.join(workspaceRoot, 'attached_assets', officialTemplate),
+    path.join(webOutput, 'template-official.xlsx'),
+  );
+  console.log(`Official XLSX copied for local browser trial: ${officialTemplate}`);
 }
 
 function clearMetroCache() {
@@ -632,7 +678,9 @@ async function main() {
     updateBundleUrls(timestamp, baseUrl);
   }
 
-  console.log('Updating manifests and creating landing page...');
+  exportWebBundle(domain, expoPublicReplId);
+
+  console.log('Updating manifests and creating browser entrypoint...');
   updateManifests(manifests, timestamp, baseUrl, assetsByHash);
 
   console.log('Build complete! Deploy to:', baseUrl);

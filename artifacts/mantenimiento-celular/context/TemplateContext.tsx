@@ -6,12 +6,14 @@ import React, {
   useState,
   type ReactNode,
 } from 'react';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/lib/auth';
 import {
   getTemplate,
   importTemplate,
   importTemplateLocally,
+  normalizeTemplateCatalog,
   saveTemplateMappings,
   type TemplateImportInput,
   type TemplateMapping,
@@ -21,6 +23,15 @@ import type { TemplateCatalog } from '@/types';
 const cacheKey = (ownerId: string) => `@mantenimiento_template_${ownerId}`;
 const LOCAL_CATALOG_KEY = '@mantenimiento_template_local';
 const LOCAL_SOURCE_KEY = '@mantenimiento_template_local_source';
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let result = '';
+  const chunk = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunk) {
+    result += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
+  }
+  return btoa(result);
+}
 
 interface TemplateContextValue {
   catalog: TemplateCatalog | null;
@@ -89,6 +100,57 @@ export function TemplateProvider({ children }: { children: ReactNode }) {
           }
         } catch {
           await AsyncStorage.removeItem(LOCAL_CATALOG_KEY);
+        }
+      }
+      if (!localCatalog && Platform.OS === 'web') {
+        let fileName = 'Mantenimiento_Preventivo_a_Sitios_Celulares.xlsx';
+        let contentBase64: string | null = null;
+        let next: TemplateCatalog | null = null;
+        const apiBase = process.env.EXPO_PUBLIC_DOMAIN
+          ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
+          : '';
+        try {
+          const trialResponse = await fetch(`${apiBase}/api/templates/trial-local`, {
+            cache: 'no-store',
+          });
+          if (trialResponse.ok) {
+            const trial = await trialResponse.json();
+            next = normalizeTemplateCatalog(trial);
+            fileName = trial.source?.fileName || fileName;
+            contentBase64 = trial.source?.contentBase64 || null;
+          }
+        } catch {
+          // The static workbook fallback below still supports a published web server.
+        }
+        if (!next) {
+          const response = await fetch(
+            `${window.location.origin}/template-official.xlsx`,
+            { cache: 'no-store' },
+          );
+          if (response.ok) {
+            contentBase64 = bytesToBase64(
+              new Uint8Array(await response.arrayBuffer()),
+            );
+            next = await importTemplateLocally({
+              fileName,
+              contentBase64,
+              replace: true,
+            });
+          }
+        }
+        if (next && contentBase64) {
+          if (mounted) {
+            await persist(next);
+            await AsyncStorage.setItem(
+              LOCAL_SOURCE_KEY,
+              JSON.stringify({
+                fileName,
+                contentBase64,
+              }),
+            );
+            setSourceFileName(fileName);
+            setSourceBase64(contentBase64);
+          }
         }
       }
       if (!user?.id) {
