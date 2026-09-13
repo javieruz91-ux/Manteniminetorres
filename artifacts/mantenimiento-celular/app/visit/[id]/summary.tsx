@@ -17,6 +17,7 @@ import { AuditEvent, Finding } from '@/types';
 import { getCloseEligibility } from '@/utils/maintenanceRules';
 import { createDemoCatalog } from '@/lib/demoTemplate';
 import { getLogicalEditableFields } from '@/utils/templateFields';
+import { catalogQuestions } from '@/utils/catalogNavigation';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 
@@ -37,17 +38,18 @@ export default function SummaryScreen() {
   if (!visit) return null;
   const activeFields = catalog?.fields ?? (visit.demoOnly ? createDemoCatalog().fields : []);
   const editableFields = getLogicalEditableFields(activeFields);
-  const respondedFieldCount = editableFields.filter(field =>
+  const realQuestions = catalogQuestions(activeFields);
+  const respondedQuestionCount = realQuestions.filter(question =>
     Object.prototype.hasOwnProperty.call(visit.responses || {}, field.id),
   ).length;
   const catalogIntegrityError = activeFields.length === 0
     ? 'No hay una plantilla activa para esta visita.'
     : catalog && catalog.descriptor.fields !== activeFields.length
       ? `El catálogo declara ${catalog.descriptor.fields} campos y cargó ${activeFields.length}.`
-    : new Set(editableFields.map(field => field.id)).size !== editableFields.length
+    : new Set(realQuestions.map(question => question.field.id)).size !== realQuestions.length
       ? 'La plantilla contiene campos editables duplicados.'
-      : respondedFieldCount !== editableFields.length
-        ? `La visita conserva ${respondedFieldCount} respuestas para ${editableFields.length} campos editables.`
+      : respondedQuestionCount !== realQuestions.length
+        ? `La visita conserva ${respondedQuestionCount} respuestas para ${realQuestions.length} preguntas reales.`
         : null;
 
   // Exact Validations
@@ -60,16 +62,15 @@ export default function SummaryScreen() {
   } = getCloseEligibility(visit, activeFields);
   const canCloseSafely = canClose && !catalogIntegrityError;
   const isClosed = visit.lifecycleStatus === 'CERRADA';
-  const reviewItems = visit.sections.flatMap(section =>
-    section.points
-      .filter(point => point.status === 'PENDING' || point.status === 'NOK')
-      .map(point => ({
-        id: point.id,
-        section: section.title,
-        title: point.title,
-        status: point.status,
-      })),
+  const statusById = new Map(
+    visit.sections.flatMap(section => section.points.map(point => [point.id, point.status] as const)),
   );
+  const reviewItems = realQuestions.map(question => ({
+    id: question.field.id,
+    section: `${question.field.sheet} · ${question.field.section || question.field.sheet}`,
+    title: question.field.label,
+    status: statusById.get(question.field.id) ?? 'PENDING',
+  }));
 
   const createAuditEvent = (action: string, reason: string): AuditEvent => {
     return {
