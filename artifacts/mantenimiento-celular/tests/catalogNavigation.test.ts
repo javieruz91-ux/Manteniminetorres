@@ -72,7 +72,7 @@ describe('navegación del catálogo por preguntas reales', () => {
   it('filtra por texto de pregunta, hoja o sección sin cambiar el catálogo', () => {
     const fields = questionFields();
     const questions = catalogQuestions(fields);
-    expect(filterCaptureQuestions(questions, 'revisión real 8')).toHaveLength(1);
+    expect(filterCaptureQuestions(questions, 'revisión real 281')).toHaveLength(1);
     expect(filterCaptureQuestions(questions, 'TRANSMISION')).toHaveLength(
       questions.filter(question => question.field.sheet === 'TRANSMISION').length,
     );
