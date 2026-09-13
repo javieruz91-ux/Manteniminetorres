@@ -19,6 +19,7 @@ import {
   patchTemplate,
   sha256,
   verifyTemplate,
+  resolveLocalSeparators,
   type TemplateCatalog,
   type TemplateField,
 } from "../lib/xlsxTemplate";
@@ -51,6 +52,22 @@ function descriptor(row: typeof excelTemplatesTable.$inferSelect | undefined) {
   };
 }
 
+function localDescriptor(
+  fileName: string,
+  bytes: Buffer,
+  parsed: TemplateCatalog,
+) {
+  return {
+    ready: parsed.ready,
+    version: "1",
+    fileName,
+    sha256: sha256(bytes),
+    catalog: parsed.catalog,
+    unmapped: parsed.unmapped,
+    audit: parsed.audit,
+  };
+}
+
 async function current(ownerId: string) {
   const [row] = await db.select().from(excelTemplatesTable)
     .where(eq(excelTemplatesTable.ownerId, ownerId))
@@ -66,6 +83,79 @@ router.get("/templates/current", async (req, res) => {
     return;
   }
   res.json(GetCurrentTemplateResponse.parse(descriptor(row)));
+});
+
+// Local-first onboarding: the device can parse its selected workbook without
+// an account. It intentionally does not persist anything to the shared DB.
+router.post("/templates/parse-local", async (req, res) => {
+  const fileName = typeof req.body?.fileName === "string" ? req.body.fileName : "plantilla.xlsx";
+  const encoded = typeof req.body?.contentBase64 === "string" ? req.body.contentBase64 : "";
+  try {
+    const bytes = Buffer.from(encoded, "base64");
+    if (!bytes.length || bytes.toString("base64") !== encoded.replace(/\s/g, "")) {
+      res.status(400).json({ error: "El archivo XLSX no es válido." });
+      return;
+    }
+    const parsed = resolveLocalSeparators(parseTemplate(bytes));
+    res.json(localDescriptor(fileName, bytes, parsed));
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : "No se pudo leer el archivo XLSX.",
+    });
+  }
+});
+
+// Local-first export. It uses the exact workbook bytes supplied by the device
+// and never needs an authenticated server session.
+router.post("/templates/export-local", async (req, res) => {
+  const { fileName, contentBase64, format, snapshot, fields, photos } = req.body ?? {};
+  try {
+    const source = Buffer.from(String(contentBase64 ?? ""), "base64");
+    if (!source.length) throw new Error("Falta el XLSX original.");
+    const parsed = resolveLocalSeparators(parseTemplate(source));
+    const exportCatalog = Array.isArray(fields) ? fields : parsed.catalog;
+    const patched = patchTemplate(source, snapshot, exportCatalog);
+    const evidencePhotos = Array.isArray(photos)
+      ? photos.map((photo: { id: string; contentBase64: string; contentType?: string }) => ({
+          id: photo.id,
+          bytes: Buffer.from(photo.contentBase64, "base64"),
+          contentType: photo.contentType ?? "image/jpeg",
+        }))
+      : [];
+    const embedded = embedEvidence(patched.bytes, evidencePhotos, exportCatalog);
+    if (!embedded.valid || embedded.consumedPhotoIds.length !== evidencePhotos.length) {
+      res.status(400).json({ error: "Exportación bloqueada: " + embedded.details.join("; ") });
+      return;
+    }
+    const verification = verifyTemplate(
+      embedded.bytes,
+      exportCatalog,
+      patched.writtenTargets,
+      patched.capturedValues,
+      Math.max(1, Math.ceil(evidencePhotos.length / Math.max(1,
+        exportCatalog.filter((field: TemplateField) =>
+          field.state === "mapped" &&
+          field.sheet === "REPORTE FOTOGRAFICO" &&
+          field.evidenceSlot === "photo").length))),
+    );
+    if (!verification.valid) {
+      res.status(400).json({ error: "Exportación bloqueada: " + verification.details.join("; "), verification });
+      return;
+    }
+    let output = embedded.bytes;
+    let mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    let outputName = `${String(fileName ?? "reporte").replace(/\.xlsx$/i, "")}_completado.xlsx`;
+    if (format === "pdf") {
+      output = await convertXlsxToPdf(output);
+      mime = "application/pdf";
+      outputName = outputName.replace(/\.xlsx$/, ".pdf");
+    }
+    res.json({ fileName: outputName, contentBase64: output.toString("base64"), mime, verification });
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : "No se pudo generar el reporte.",
+    });
+  }
 });
 
 router.post("/templates/import", async (req, res) => {

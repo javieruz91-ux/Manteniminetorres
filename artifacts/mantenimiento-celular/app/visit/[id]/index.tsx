@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,7 +8,9 @@ import { useColors } from '@/hooks/useColors';
 import { Card } from '@/components/Card';
 import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
-import type { ChecklistStatus, TemplateField } from '@/types';
+import { PhotoPicker } from '@/components/PhotoPicker';
+import type { ChecklistStatus, Finding, Photo, TemplateField } from '@/types';
+import * as Crypto from 'expo-crypto';
 
 const statusOptions: Array<{ value: ChecklistStatus; label: string; icon: any }> = [
   { value: 'OK', label: 'OK', icon: 'check' },
@@ -19,11 +21,12 @@ const statusOptions: Array<{ value: ChecklistStatus; label: string; icon: any }>
 
 export default function VisitDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { getVisit, updateResponse, updatePointStatus } = useVisits();
+  const { getVisit, updateResponse, updatePointStatus, saveFindingAndStatus, savePhoto } = useVisits();
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [search, setSearch] = useState('');
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   const visit = getVisit(id);
 
   const fields = visit?.templateFields ?? [];
@@ -76,15 +79,50 @@ export default function VisitDetailScreen() {
     const owner = visit.sections.find(section => section.points.some(point => point.id === field.id));
     if (!owner) return;
     if (status === 'NOK') {
-      await updateResponse(visit.id, field.id, status);
-      router.push({
-        pathname: `/visit/${visit.id}/finding/${field.id}` as any,
-        params: { sectionId: owner.id },
+      const existing = visit.findings.find(finding => finding.pointId === field.id);
+      await saveFindingAndStatus(visit.id, field.id, owner.id, 'NOK', existing ?? {
+        id: Crypto.randomUUID(),
+        pointId: field.id,
+        sectionId: owner.id,
+        description: '',
+        responsible: '',
+        priority: 'MEDIA',
+        startDate: new Date().toISOString().slice(0, 10),
+        commitmentDate: '',
+        completedDate: null,
+        photos: [],
+        state: 'ABIERTO',
       });
+      setExpandedSections(previous => ({ ...previous, [owner.id]: true }));
     } else {
       await updatePointStatus(visit.id, owner.id, field.id, status);
       await updateResponse(visit.id, field.id, status);
     }
+  };
+
+  const markRemainingOk = () => {
+    Alert.alert(
+      'Marcar restantes como OK',
+      'Esto completará los puntos que aún están pendientes. ¿Continuar?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Marcar como OK',
+          onPress: () => {
+            void (async () => {
+              for (const section of visit.sections) {
+                for (const point of section.points) {
+                  if (point.status === 'PENDING') {
+                    await updatePointStatus(visit.id, section.id, point.id, 'OK');
+                    await updateResponse(visit.id, point.id, 'OK');
+                  }
+                }
+              }
+            })();
+          },
+        },
+      ],
+    );
   };
 
   return (
@@ -100,7 +138,10 @@ export default function VisitDetailScreen() {
         <Card style={styles.card}>
           <View style={styles.titleRow}>
             <View style={{ flex: 1 }}>
-              <Text style={[styles.title, { color: colors.foreground }]}>Captura de visita</Text>
+              <Text style={[styles.title, { color: colors.foreground }]}>Paso 1 de 3 · Nueva visita</Text>
+              <Text style={[styles.stepHint, { color: colors.mutedForeground }]}>
+                Completa los datos generales y continúa con el checklist.
+              </Text>
               <Text style={{ color: colors.mutedForeground }}>
                 {visit.template ? `Plantilla ${visit.template.version} · ${visit.template.hash.slice(0, 12)}` : 'Sin plantilla fijada'}
               </Text>
@@ -116,7 +157,7 @@ export default function VisitDetailScreen() {
             style={[styles.search, { color: colors.foreground, borderColor: colors.border }]}
           />
           <View style={styles.progressHeader}>
-            <Text style={{ color: colors.foreground }}>Progreso de campos</Text>
+            <Text style={{ color: colors.foreground }}>Paso 2 de 3 · Checklist</Text>
             <Text style={{ color: colors.primary, fontFamily: 'Inter_700Bold' }}>{completed}/{editableFields.length}</Text>
           </View>
           <View style={[styles.progressBg, { backgroundColor: colors.muted }]}>
@@ -130,37 +171,108 @@ export default function VisitDetailScreen() {
           <Card style={styles.card}><Text style={{ color: colors.mutedForeground }}>No hay resultados para la búsqueda.</Text></Card>
         ) : groups.map(([key, group]) => {
           const [sheet, section, subsection] = key.split('\u0000');
+          const sectionId = `${sheet}:${section}:${subsection}`;
+          const expanded = expandedSections[sectionId] ?? true;
           return (
             <Card key={key} style={styles.card}>
-              <Text style={[styles.groupTitle, { color: colors.foreground }]}>{sheet}</Text>
-              <Text style={[styles.groupSubtitle, { color: colors.mutedForeground }]}>{section}{subsection ? ` · ${subsection}` : ''}</Text>
-              {group.map(field => (
-                <FieldRenderer
-                  key={field.id}
-                  field={field}
-                  value={visit.responses[field.id]}
-                  status={statusFor(field.id)}
-                  readOnly={isReadOnly}
-                  colors={colors}
-                  onValue={(value: unknown) => setValue(field, value)}
-                  onStatus={(status: ChecklistStatus) => void chooseStatus(field, status)}
-                  hasFinding={visit.findings.some(finding => finding.pointId === field.id)}
-                />
-              ))}
+              <TouchableOpacity
+                onPress={() => setExpandedSections(previous => ({ ...previous, [sectionId]: !expanded }))}
+                style={styles.sectionHeader}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.groupTitle, { color: colors.foreground }]}>{sheet}</Text>
+                  <Text style={[styles.groupSubtitle, { color: colors.mutedForeground }]}>
+                    {section}{subsection ? ` · ${subsection}` : ''}
+                  </Text>
+                </View>
+                <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={22} color={colors.mutedForeground} />
+              </TouchableOpacity>
+              {expanded && group.map(field => {
+                const owner = visit.sections.find(candidate => candidate.points.some(point => point.id === field.id));
+                const finding = visit.findings.find(candidate => candidate.pointId === field.id);
+                return (
+                  <FieldRenderer
+                    key={field.id}
+                    field={field}
+                    value={visit.responses[field.id]}
+                    status={statusFor(field.id)}
+                    finding={finding}
+                    sectionId={owner?.id}
+                    readOnly={isReadOnly}
+                    colors={colors}
+                    onValue={(value: unknown) => setValue(field, value)}
+                    onStatus={(nextStatus: ChecklistStatus) => void chooseStatus(field, nextStatus)}
+                    onFinding={async (nextFinding: Finding) => {
+                      if (owner) await saveFindingAndStatus(visit.id, field.id, owner.id, 'NOK', nextFinding);
+                    }}
+                    onPhoto={async (photo: Photo) => {
+                      if (!owner || !finding) return;
+                      const storedUri = await savePhoto(photo.uri, visit.id, photo.id);
+                      await saveFindingAndStatus(visit.id, field.id, owner.id, 'NOK', {
+                        ...finding,
+                        photos: [...finding.photos, { ...photo, uri: storedUri }],
+                      });
+                    }}
+                    onRemovePhoto={async (photoId: string) => {
+                      if (!owner || !finding) return;
+                      await saveFindingAndStatus(visit.id, field.id, owner.id, 'NOK', {
+                        ...finding,
+                        photos: finding.photos.filter(photo => photo.id !== photoId),
+                      });
+                    }}
+                    hasFinding={Boolean(finding)}
+                  />
+                );
+              })}
             </Card>
           );
         })}
 
+        <Button
+          title="Marcar restantes como OK"
+          variant="outline"
+          icon={<Feather name="check-square" size={18} color={colors.foreground} />}
+          onPress={markRemainingOk}
+          disabled={isReadOnly}
+        />
+        <View style={styles.actionRow}>
+          <Button
+            title="Anterior"
+            variant="outline"
+            style={{ flex: 1 }}
+            icon={<Feather name="arrow-left" size={18} color={colors.foreground} />}
+            onPress={() => router.back()}
+          />
+          <Button
+            title="Continuar después"
+            variant="ghost"
+            style={{ flex: 1 }}
+            onPress={() => router.replace('/')}
+          />
+        </View>
         <View style={styles.actionRow}>
           <Button title={`Hallazgos (${visit.findings.length})`} variant="secondary" style={{ flex: 1 }} icon={<Feather name="alert-triangle" size={18} color={colors.foreground} />} onPress={() => router.push(`/visit/${visit.id}/findings`)} />
-          <Button title="Resumen y Cierre" style={{ flex: 1 }} icon={<Feather name="file-text" size={18} color="#FFF" />} onPress={() => router.push(`/visit/${visit.id}/summary`)} />
+          <Button title="Siguiente: revisar" style={{ flex: 1 }} icon={<Feather name="arrow-right" size={18} color="#FFF" />} onPress={() => router.push(`/visit/${visit.id}/summary`)} />
         </View>
       </ScrollView>
     </View>
   );
 }
 
-function FieldRenderer({ field, value, status, readOnly, colors, onValue, onStatus, hasFinding }: any) {
+function FieldRenderer({
+  field,
+  value,
+  status,
+  finding,
+  readOnly,
+  colors,
+  onValue,
+  onStatus,
+  onFinding,
+  onPhoto,
+  onRemovePhoto,
+  hasFinding,
+}: any) {
   if (field.isTitle || field.editable === false) {
     return <Text style={[styles.heading, { color: colors.foreground }]}>{field.label}</Text>;
   }
@@ -189,7 +301,16 @@ function FieldRenderer({ field, value, status, readOnly, colors, onValue, onStat
             );
           })}
         </View>
-        {status === 'NOK' && <Text style={{ color: colors.destructive, fontSize: 12 }}>Se requiere registrar un hallazgo.</Text>}
+        {status === 'NOK' && (
+          <InlineFinding
+            finding={finding}
+            readOnly={readOnly}
+            colors={colors}
+            onChange={onFinding}
+            onPhoto={onPhoto}
+            onRemovePhoto={onRemovePhoto}
+          />
+        )}
       </View>
     );
   }
@@ -223,11 +344,94 @@ function FieldRenderer({ field, value, status, readOnly, colors, onValue, onStat
   );
 }
 
+function InlineFinding({
+  finding,
+  readOnly,
+  colors,
+  onChange,
+  onPhoto,
+  onRemovePhoto,
+}: {
+  finding?: Finding;
+  readOnly: boolean;
+  colors: any;
+  onChange: (finding: Finding) => void;
+  onPhoto: (photo: any) => void;
+  onRemovePhoto: (photoId: string) => void;
+}) {
+  if (!finding) return null;
+  const update = (patch: Partial<Finding>) => onChange({ ...finding, ...patch });
+  return (
+    <View style={[styles.inlineFinding, { borderColor: colors.warning, backgroundColor: colors.background }]}>
+      <Text style={[styles.inlineTitle, { color: colors.warning }]}>Hallazgo requerido</Text>
+      <Input
+        label="Descripción"
+        value={finding.description}
+        onChangeText={description => update({ description })}
+        multiline
+        numberOfLines={3}
+        editable={!readOnly}
+      />
+      <Input
+        label="Responsable"
+        value={finding.responsible}
+        onChangeText={responsible => update({ responsible })}
+        editable={!readOnly}
+      />
+      <Text style={[styles.inlineLabel, { color: colors.foreground }]}>Prioridad</Text>
+      <View style={styles.options}>
+        {(['BAJA', 'MEDIA', 'ALTA', 'CRITICA'] as const).map(priority => (
+          <TouchableOpacity
+            key={priority}
+            disabled={readOnly}
+            onPress={() => update({ priority })}
+            style={[
+              styles.choice,
+              {
+                borderColor: finding.priority === priority ? colors.primary : colors.border,
+                backgroundColor: finding.priority === priority ? colors.primary : colors.background,
+              },
+            ]}
+          >
+            <Text style={{ color: finding.priority === priority ? '#FFF' : colors.foreground, fontSize: 12 }}>
+              {priority}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      <Input
+        label="Fecha compromiso (AAAA-MM-DD)"
+        value={finding.commitmentDate}
+        onChangeText={commitmentDate => update({ commitmentDate })}
+        placeholder="AAAA-MM-DD"
+        editable={!readOnly}
+      />
+      <PhotoPicker
+        label="Tomar foto ANTES"
+        type="ANTES"
+        photos={finding.photos}
+        onAdd={onPhoto}
+        onRemove={onRemovePhoto}
+        disabled={readOnly}
+      />
+      <PhotoPicker
+        label="Tomar foto DESPUÉS (opcional)"
+        type="DESPUES"
+        photos={finding.photos}
+        onAdd={onPhoto}
+        onRemove={onRemovePhoto}
+        disabled={readOnly}
+      />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   content: { padding: 16, gap: 16, width: '100%', maxWidth: 900, alignSelf: 'center' },
   card: { padding: 16, gap: 10 },
   titleRow: { flexDirection: 'row', alignItems: 'flex-start' },
   title: { fontSize: 22, fontFamily: 'Inter_700Bold' },
+  stepHint: { fontSize: 14, marginTop: 4, lineHeight: 20 },
   missing: { fontFamily: 'Inter_700Bold', fontSize: 16 },
   search: { height: 46, borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, marginTop: 8 },
   progressHeader: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
@@ -243,5 +447,9 @@ const styles = StyleSheet.create({
   status: { borderWidth: 1, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 5 },
   choice: { borderWidth: 1, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12 },
   actionRow: { flexDirection: 'row', gap: 12 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 4 },
+  inlineFinding: { marginTop: 12, padding: 12, borderWidth: 1, borderRadius: 12, gap: 8 },
+  inlineTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 },
+  inlineLabel: { fontFamily: 'Inter_500Medium', marginTop: 4 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 });

@@ -296,7 +296,9 @@ router.post(
       res.json(ExchangeMobileAuthorizationCodeResponse.parse({ token: sid }));
     } catch (err) {
       req.log.error(getSafeErrorMetadata(err), 'Mobile token exchange error');
-      res.status(500).json({ error: 'Token exchange failed' });
+      res.status(400).json({
+        error: 'El proveedor rechazó el inicio de sesión. Cierra la ventana e inténtalo de nuevo.',
+      });
     }
   },
 );

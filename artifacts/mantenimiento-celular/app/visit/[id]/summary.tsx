@@ -11,16 +11,18 @@ import * as Haptics from 'expo-haptics';
 import * as Crypto from 'expo-crypto';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { saveAndShareTemplateExport } from '@/utils/templateExport';
-import { exportTemplate, getTemplateExportBlockReason } from '@/lib/templateApi';
+import { exportTemplate, exportTemplateLocally, getTemplateExportBlockReason } from '@/lib/templateApi';
 import { useTemplate } from '@/context/TemplateContext';
 import { AuditEvent, Finding } from '@/types';
 import { getCloseEligibility } from '@/utils/maintenanceRules';
+import * as FileSystem from 'expo-file-system/legacy';
+import { Platform } from 'react-native';
 
 export default function SummaryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { getVisit, updateVisit, triggerSync, closeVisit, reopenVisit, isDemoMode } = useVisits();
+  const { getVisit, updateVisit, triggerSync, closeVisit, reopenVisit, isDemoMode, isLocalMode } = useVisits();
   const { user, login } = useAuth();
-  const { catalog } = useTemplate();
+  const { catalog, sourceBase64, sourceFileName } = useTemplate();
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -41,13 +43,23 @@ export default function SummaryScreen() {
     eligible: canClose,
   } = getCloseEligibility(visit);
   const isClosed = visit.lifecycleStatus === 'CERRADA';
+  const reviewItems = visit.sections.flatMap(section =>
+    section.points
+      .filter(point => point.status === 'PENDING' || point.status === 'NOK')
+      .map(point => ({
+        id: point.id,
+        section: section.title,
+        title: point.title,
+        status: point.status,
+      })),
+  );
 
   const createAuditEvent = (action: string, reason: string): AuditEvent => {
     return {
       id: Crypto.randomUUID(),
       eventType: action,
       occurredAt: new Date().toISOString(),
-      actorId: user?.id || (isDemoMode ? 'demo-technician' : 'unknown'),
+      actorId: user?.id || 'local-technician',
       metadata: { reason }
     };
   };
@@ -61,7 +73,7 @@ export default function SummaryScreen() {
       return;
     }
 
-    if (!user && !isDemoMode) {
+    if (!user && !isLocalMode) {
       Alert.alert(
         'Iniciar Sesión Requerido',
         'Necesitas iniciar sesión para cerrar y sincronizar la visita.',
@@ -85,11 +97,11 @@ export default function SummaryScreen() {
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               const auditEvent = createAuditEvent('CLOSE_VISIT', 'Visita cerrada y lista para sincronización');
               await closeVisit(visit.id, auditEvent);
-              if (!isDemoMode) triggerSync();
+              if (!isLocalMode) triggerSync();
               Alert.alert(
                 '¡Cerrada!',
-                isDemoMode
-                  ? 'La visita ficticia quedó cerrada localmente. La sincronización no se verifica en modo demo.'
+                isLocalMode
+                  ? 'La visita quedó cerrada en este dispositivo. Puedes generar el reporte o respaldarla después.'
                   : 'La visita ha sido cerrada y está en cola de sincronización.',
               );
             } catch (e: any) {
@@ -111,7 +123,7 @@ export default function SummaryScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       const auditEvent = createAuditEvent('REOPEN_VISIT', reopenReason);
       await reopenVisit(visit.id, auditEvent);
-      if (!isDemoMode) triggerSync();
+      if (!isLocalMode) triggerSync();
       setReopenModalVisible(false);
       setReopenReason('');
       Alert.alert('Reabierta', 'La visita ha sido reabierta.');
@@ -121,7 +133,7 @@ export default function SummaryScreen() {
   };
 
   const handleReopenVisit = () => {
-    if (!user && !isDemoMode) {
+    if (!user && !isLocalMode) {
       Alert.alert('Iniciar Sesión Requerido', 'Necesitas iniciar sesión para reabrir la visita.', [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Iniciar Sesión', onPress: () => login() }
@@ -133,10 +145,10 @@ export default function SummaryScreen() {
   };
 
   const handleManualSync = async () => {
-    if (isDemoMode) {
+    if (isLocalMode) {
       Alert.alert(
-        'Sincronización no verificable',
-        'El modo demo conserva los datos y fotografías únicamente en este dispositivo o navegador.',
+        'Modo local',
+        'La visita queda guardada en este dispositivo. Inicia sesión después si quieres respaldarla.',
       );
       return;
     }
@@ -164,7 +176,38 @@ export default function SummaryScreen() {
     }
     try {
       setIsGenerating(true);
-      const result = await exportTemplate(visit.id, format);
+      const result = sourceBase64
+        ? await exportTemplateLocally({
+            fileName: sourceFileName || catalog?.descriptor.fileName || 'reporte.xlsx',
+            contentBase64: sourceBase64,
+            format,
+            snapshot: visit,
+            fields: visit.templateFields.map(field => ({
+              id: field.id,
+              sheet: field.sheet,
+              subsection: field.subsection || field.section,
+              key: field.target?.cell || field.target?.range || field.id,
+              label: field.label,
+              responseType: field.type,
+              options: field.options || [],
+              required: Boolean(field.required),
+              applicability: field.applicability || '',
+              evidenceSlot: field.evidenceSlot || 'none',
+              target: `${field.sheet}!${field.target?.cell || field.target?.range || ''}`,
+              sourceEvidence: field.fullText || field.label,
+              confidence: 1,
+              state: 'mapped',
+              ignoreReason: null,
+            })),
+            photos: await Promise.all(
+              visit.findings.flatMap(finding => finding.photos).map(async photo => ({
+                id: photo.id,
+                contentBase64: await photoToBase64(photo.uri),
+                contentType: photo.uri.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg',
+              })),
+            ),
+          })
+        : await exportTemplate(visit.id, format);
       if (
         result.verification &&
         (result.verification.verified === false ||
@@ -198,12 +241,12 @@ export default function SummaryScreen() {
           </Text>
           <Text style={{ color: colors.mutedForeground, marginBottom: 12 }}>
             Sincronización: <Text style={{ fontFamily: 'Inter_700Bold', color: colors.foreground }}>
-              {isDemoMode ? 'NO VERIFICABLE (DEMO)' : visit.syncStatus}
+              {isLocalMode ? 'GUARDADA EN ESTE DISPOSITIVO' : visit.syncStatus}
             </Text>
           </Text>
-          {isDemoMode && (
+          {isLocalMode && (
             <Text style={[styles.demoNotice, { color: colors.warning }]}>
-              Las fotos permanecen locales y no se suben. Ningún dato ficticio se envía al servidor.
+              El uso local no necesita login. El respaldo al servidor queda disponible después.
             </Text>
           )}
           
@@ -228,6 +271,28 @@ export default function SummaryScreen() {
           </View>
         </Card>
 
+        <Card style={styles.card}>
+          <Text style={[styles.cardTitle, { color: colors.foreground }]}>Revisar antes de finalizar</Text>
+          {reviewItems.length === 0 ? (
+            <View style={styles.valItem}>
+              <Feather name="check-circle" size={18} color={colors.success} />
+              <Text style={[styles.valText, { color: colors.success }]}>No hay pendientes ni NOK.</Text>
+            </View>
+          ) : (
+            reviewItems.map(item => (
+              <View key={item.id} style={styles.reviewItem}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.foreground, fontFamily: 'Inter_600SemiBold' }}>{item.title}</Text>
+                  <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>{item.section}</Text>
+                </View>
+                <Text style={[styles.reviewStatus, { color: item.status === 'NOK' ? colors.destructive : colors.warning }]}>
+                  {item.status === 'NOK' ? 'NOK' : 'PENDIENTE'}
+                </Text>
+              </View>
+            ))
+          )}
+        </Card>
+
         {visit.syncError && (
           <Card style={[styles.card, { borderColor: colors.destructive, borderWidth: 1 }]}>
             <Text style={[styles.cardTitle, { color: colors.destructive }]}>Error de Sincronización</Text>
@@ -249,10 +314,12 @@ export default function SummaryScreen() {
             <View style={{ alignItems: 'center', marginBottom: 20 }}>
               <Feather name={visit.syncStatus === 'SINCRONIZADO' ? "check-circle" : "cloud"} size={48} color={visit.syncStatus === 'SINCRONIZADO' ? colors.success : colors.primary} style={{ marginBottom: 12 }} />
               <Text style={[styles.cardTitle, { color: colors.foreground, textAlign: 'center' }]}>
-                {visit.syncStatus === 'SINCRONIZADO' ? 'Visita Sincronizada' : 'Visita Cerrada'}
+                 {isLocalMode ? 'Visita cerrada localmente' : visit.syncStatus === 'SINCRONIZADO' ? 'Visita sincronizada' : 'Visita cerrada'}
               </Text>
               <Text style={{ color: colors.mutedForeground, textAlign: 'center', marginTop: 4 }}>
-                {visit.syncStatus === 'SINCRONIZADO' 
+                 {isLocalMode
+                   ? 'Los datos están guardados en este dispositivo.'
+                   : visit.syncStatus === 'SINCRONIZADO'
                   ? 'Los datos ya están en el servidor central. Puedes descargar los reportes.' 
                   : 'La visita está cerrada y lista para sincronizarse.'}
               </Text>
@@ -285,7 +352,7 @@ export default function SummaryScreen() {
         ) : (
           <Button
             testID="btn-close-visit"
-            title="Cerrar Visita"
+            title="Finalizar y generar reporte"
             size="lg"
             onPress={handleCloseVisit}
             disabled={!canClose}
@@ -339,6 +406,24 @@ export default function SummaryScreen() {
   );
 }
 
+async function photoToBase64(uri: string): Promise<string> {
+  if (uri.startsWith('data:')) {
+    return uri.split(',')[1] || '';
+  }
+  if (Platform.OS !== 'web') {
+    return FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+  }
+  const response = await fetch(uri);
+  const buffer = await response.arrayBuffer();
+  let binary = '';
+  new Uint8Array(buffer).forEach(byte => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
 const styles = StyleSheet.create({
   content: {
     padding: 16,
@@ -368,6 +453,18 @@ const styles = StyleSheet.create({
   valText: {
     fontSize: 15,
     fontFamily: 'Inter_500Medium',
+  },
+  reviewItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  reviewStatus: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 11,
   },
   statRow: {
     flexDirection: 'row',

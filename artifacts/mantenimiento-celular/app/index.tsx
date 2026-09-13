@@ -14,15 +14,50 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getVisitConvenienceFields } from '@/utils/maintenanceRules';
 import { saveAndShareTemplateExport } from '@/utils/templateExport';
 import { exportBlankTemplate } from '@/lib/templateApi';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import { MIME_XLSX } from '@/lib/templateApi';
 
 export default function DashboardScreen() {
   const { visits, createVisit, isOnline, isDemoMode, resetDemoData } = useVisits();
   const { user, login, logout, isAuthenticated } = useAuth();
-  const { catalog, isLoading: templateLoading } = useTemplate();
+  const { catalog, isLoading: templateLoading, uploadLocal } = useTemplate();
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [isDownloadingTemplate, setIsDownloadingTemplate] = React.useState(false);
+  const [isImportingTemplate, setIsImportingTemplate] = React.useState(false);
+
+  const handleLoadTemplate = async () => {
+    try {
+      setIsImportingTemplate(true);
+      const result = await DocumentPicker.getDocumentAsync({
+        type: MIME_XLSX,
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      const asset = result.assets[0];
+      const contentBase64 = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      await uploadLocal({
+        fileName: asset.name || 'mi_formato.xlsx',
+        contentBase64,
+        replace: true,
+      });
+      Alert.alert('Formato cargado', 'Ya puedes iniciar una visita con tus campos reales.');
+    } catch (error) {
+      Alert.alert(
+        'No se pudo cargar',
+        error instanceof Error
+          ? error.message
+          : 'Selecciona un archivo XLSX válido e inténtalo de nuevo.',
+      );
+    } finally {
+      setIsImportingTemplate(false);
+    }
+  };
 
   const handleStartVisit = async () => {
     try {
@@ -133,24 +168,24 @@ export default function DashboardScreen() {
       </View>
 
       {!templateLoading && !catalog && (
-        <TouchableOpacity
+         <TouchableOpacity
           testID="missing-template-banner"
           onPress={() => router.push('/settings/template')}
           style={[styles.templateBanner, { backgroundColor: colors.destructive }]}
         >
           <Feather name="alert-triangle" size={16} color="#FFF" />
           <Text style={styles.templateBannerText}>
-            Falta cargar la plantilla Excel original · Configurar ahora
+             Aún no has cargado tu formato · usa “Cargar mi formato Excel”
           </Text>
         </TouchableOpacity>
       )}
 
-      {isDemoMode && (
+       {isDemoMode && (
         <View style={[styles.demoBanner, { backgroundColor: colors.warning }]}>
           <View style={styles.demoCopy}>
-            <Text style={styles.demoTitle}>MODO DEMO · DATOS FICTICIOS</Text>
+            <Text style={styles.demoTitle}>MODO DEMOSTRACIÓN · LOCAL</Text>
             <Text style={styles.demoText}>
-              Permite probar el flujo completo. No sincroniza ni sube fotografías.
+              Puedes llenar y cerrar una visita. Para generar el Excel exacto, carga tu formato.
             </Text>
           </View>
           <TouchableOpacity
@@ -235,28 +270,40 @@ export default function DashboardScreen() {
       />
 
       <View style={[styles.footer, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: Math.max(insets.bottom, 16) }]}>
+        {!catalog && (
+          <Button
+            testID="btn-load-template"
+            title="Cargar mi formato Excel"
+            icon={<Feather name="upload" size={17} color="#FFF" />}
+            onPress={() => void handleLoadTemplate()}
+            loading={isImportingTemplate}
+            disabled={isImportingTemplate}
+          />
+        )}
+        {!catalog && (
+          <Button
+            testID="btn-demo-visit"
+            title="Probar con datos de ejemplo"
+            variant="outline"
+            icon={<Feather name="play-circle" size={17} color={colors.foreground} />}
+            onPress={() => void handleResetDemo()}
+          />
+        )}
         <Button
-          testID="btn-download-empty-template"
-          title="Descargar plantilla Excel vacía"
-          variant="outline"
-          icon={<Feather name="download" size={17} color={colors.foreground} />}
-          onPress={() => void handleDownloadBlankTemplate()}
-          loading={isDownloadingTemplate}
-          disabled={isDownloadingTemplate}
-        />
-        <Button
-          title="Configuración de plantilla"
+          title="Administración de plantilla"
           variant="ghost"
           icon={<Feather name="settings" size={17} color={colors.primary} />}
           onPress={() => router.push('/settings/template')}
         />
-        <Button
-          testID="btn-start-visit"
-          title="Iniciar Visita"
-          icon={<Feather name="plus" size={20} color="#FFF" />}
-          onPress={handleStartVisit}
-          size="lg"
-        />
+        {catalog && (
+          <Button
+            testID="btn-start-visit"
+            title="Nueva visita"
+            icon={<Feather name="plus" size={20} color="#FFF" />}
+            onPress={handleStartVisit}
+            size="lg"
+          />
+        )}
       </View>
     </View>
   );

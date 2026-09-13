@@ -37,6 +37,30 @@ export type TemplateCatalog = {
   catalog: TemplateField[]; unmapped: TemplateCandidate[];
   audit: Array<Record<string, unknown>>; ready: boolean;
 };
+
+/** Local onboarding treats the known empty separator cell as non-operational. */
+export function resolveLocalSeparators(parsed: TemplateCatalog): TemplateCatalog {
+  const ignored = parsed.unmapped.filter((candidate) =>
+    candidate.target.toUpperCase() === "INFRAESTRUCTURA!D20" ||
+    (!candidate.reason.toLowerCase().includes("evidencia") &&
+      candidate.target.toUpperCase().includes("!D20")),
+  );
+  if (ignored.length === 0) return parsed;
+  const ignoredTargets = new Set(ignored.map((candidate) => candidate.target));
+  return {
+    ...parsed,
+    unmapped: parsed.unmapped.filter((candidate) => !ignoredTargets.has(candidate.target)),
+    audit: [
+      ...parsed.audit,
+      ...ignored.map((candidate) => ({
+        type: "candidate-auto-ignored",
+        target: candidate.target,
+        reason: "Fila separadora vacía detectada automáticamente",
+      })),
+    ],
+    ready: parsed.unmapped.every((candidate) => ignoredTargets.has(candidate.target)),
+  };
+}
 export type TemplateVerification = {
   valid: boolean; sheets: string[]; writtenTargets: string[]; details: string[];
 };

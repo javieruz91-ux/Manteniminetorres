@@ -177,6 +177,16 @@ describe('dynamic template maintenance rules', () => {
     expect(getCloseEligibility(visit).missingItems.join('\n')).toContain('Campo requerido');
   });
 
+  it('allows a clearly local demo visit to close without a real workbook', () => {
+    let visit = allStatusPoints(createDraftVisit({
+      templateFields: importedFields,
+    }), 'OK');
+    visit = { ...visit, demoOnly: true };
+    expect(getCloseEligibility(visit).eligible).toBe(true);
+    expect(visit.template).toBeUndefined();
+    expect(getTemplateExportBlockReason(visit, null)).toContain('Falta cargar');
+  });
+
   it('removes NOK finding evidence when leaving NOK and preserves lifecycle rules', () => {
     const nokDraft = allStatusPoints(draft(), 'NOK');
     let visit = saveFindingAndStatus(nokDraft, nokDraft.sections[0].id, 'status-1', 'NOK', finding(nokDraft), { id: ids, now });

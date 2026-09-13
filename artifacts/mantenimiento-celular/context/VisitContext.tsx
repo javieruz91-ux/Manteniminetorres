@@ -24,6 +24,7 @@ import {
   getVisitConvenienceFields,
   buildStatusPointWire,
 } from '../utils/maintenanceRules';
+import { createDemoCatalog } from '@/lib/demoTemplate';
 
 interface VisitContextValue {
   visits: Visit[];
@@ -41,6 +42,7 @@ interface VisitContextValue {
   savePhoto: (tempUri: string, visitId: string, photoId?: string) => Promise<string>;
   triggerSync: () => void;
   isDemoMode: boolean;
+  isLocalMode: boolean;
   resetDemoData: () => Promise<string>;
 }
 
@@ -60,11 +62,14 @@ export function VisitProvider({ children }: { children: ReactNode }) {
   const [isOnline, setIsOnline] = useState(true);
   const { user, isAuthenticated } = useAuth();
   const { catalog } = useTemplate();
-  const isDemoMode = __DEV__ && !isAuthenticated && process.env.EXPO_PUBLIC_DEMO_MODE !== 'false';
+  const isLocalMode = !isAuthenticated;
+  const isDemoMode = !catalog;
+  const demoCatalog = createDemoCatalog();
+  const effectiveFields = catalog?.fields ?? demoCatalog.fields;
   
   const isHydrated = useRef(false);
-  const currentNamespace = isDemoMode
-    ? '@mantenimiento_demo_v1'
+  const currentNamespace = isLocalMode
+    ? '@mantenimiento_visits_guest'
     : `@mantenimiento_visits_${user?.id || 'guest'}`;
   const cleanupNamespace = `${currentNamespace}_photo_cleanup`;
   const persistQueue = useRef(Promise.resolve<any>(null));
@@ -432,14 +437,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const createVisit = async (data: Partial<Visit>): Promise<string> => {
-    if (!catalog && !isDemoMode) {
-      throw new Error('Falta cargar la plantilla Excel original.');
-    }
-    if (
-      catalog &&
-      (!catalog.descriptor.ready || catalog.descriptor.unmappedCells.length > 0) &&
-      !isDemoMode
-    ) {
+    if (catalog && (!catalog.descriptor.ready || catalog.descriptor.unmappedCells.length > 0)) {
       throw new Error(
         'La plantilla tiene celdas editables sin mapear. Resuelve la auditoría antes de iniciar una visita.',
       );
@@ -453,7 +451,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
             hash: catalog.descriptor.hash,
           }
         : undefined,
-      templateFields: catalog?.fields ?? [],
+       templateFields: effectiveFields,
     }, {
       id: () => Crypto.randomUUID(),
       now: () => new Date().toISOString(),
@@ -465,15 +463,14 @@ export function VisitProvider({ children }: { children: ReactNode }) {
   };
 
   const resetDemoData = async (): Promise<string> => {
-    if (!isDemoMode) {
-      throw new Error('El modo demo solo está disponible durante el desarrollo.');
-    }
+    const demo = createDemoCatalog();
     const demoVisit = createDraftVisit(
       {
         siteId: 'DEMO-SITIO-001',
         siteName: 'Sitio ficticio de capacitación',
         workOrder: 'OT-DEMO-001',
         technician: 'Técnico de demostración',
+        templateFields: demo.fields,
       },
       {
         id: () => Crypto.randomUUID(),
@@ -481,8 +478,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       },
     );
     demoVisit.demoOnly = true;
-    demoVisit.syncError =
-      'Modo demo: la sincronización y la subida de fotografías no se envían al servidor.';
+    demoVisit.syncError = 'Modo demostración: los datos permanecen en este dispositivo.';
     await updateAndPersist(() => [demoVisit]);
     return demoVisit.id;
   };
@@ -985,6 +981,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       savePhoto,
       triggerSync,
       isDemoMode,
+      isLocalMode,
       resetDemoData
     }}>
       {children}

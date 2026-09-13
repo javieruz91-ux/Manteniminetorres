@@ -58,6 +58,15 @@ export interface TemplateExportResult {
   };
 }
 
+export interface LocalTemplateExportInput {
+  fileName: string;
+  contentBase64: string;
+  format: 'xlsx' | 'pdf';
+  snapshot: unknown;
+  fields: unknown[];
+  photos?: Array<{ id: string; contentBase64: string; contentType?: string }>;
+}
+
 function baseUrl(): string {
   return process.env.EXPO_PUBLIC_DOMAIN
     ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
@@ -216,6 +225,18 @@ export async function importTemplate(input: TemplateImportInput): Promise<Templa
   return catalog;
 }
 
+export async function importTemplateLocally(
+  input: TemplateImportInput,
+): Promise<TemplateCatalog> {
+  const value = await request<any>('/api/templates/parse-local', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  const catalog = unwrapCatalog(value);
+  if (!catalog) throw new Error('No se pudo leer el catálogo del XLSX.');
+  return catalog;
+}
+
 export async function saveTemplateMappings(
   mappings: TemplateMapping[],
   version?: number,
@@ -237,6 +258,22 @@ export async function exportTemplate(
     {
     method: 'POST',
     body: JSON.stringify({ visitId, format }),
+    },
+  );
+  return {
+    ...result,
+    base64: result.base64 || result.contentBase64 || '',
+  };
+}
+
+export async function exportTemplateLocally(
+  input: LocalTemplateExportInput,
+): Promise<TemplateExportResult> {
+  const result = await request<TemplateExportResult & { contentBase64?: string }>(
+    '/api/templates/export-local',
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
     },
   );
   return {

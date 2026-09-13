@@ -11,6 +11,7 @@ import { useAuth } from '@/lib/auth';
 import {
   getTemplate,
   importTemplate,
+  importTemplateLocally,
   saveTemplateMappings,
   type TemplateImportInput,
   type TemplateMapping,
@@ -18,12 +19,17 @@ import {
 import type { TemplateCatalog } from '@/types';
 
 const cacheKey = (ownerId: string) => `@mantenimiento_template_${ownerId}`;
+const LOCAL_CATALOG_KEY = '@mantenimiento_template_local';
+const LOCAL_SOURCE_KEY = '@mantenimiento_template_local_source';
 
 interface TemplateContextValue {
   catalog: TemplateCatalog | null;
   isLoading: boolean;
   error: string | null;
+  sourceBase64: string | null;
+  sourceFileName: string | null;
   refresh: () => Promise<void>;
+  uploadLocal: (input: TemplateImportInput) => Promise<TemplateCatalog>;
   upload: (input: TemplateImportInput) => Promise<TemplateCatalog>;
   saveMappings: (mappings: TemplateMapping[]) => Promise<void>;
 }
@@ -35,31 +41,33 @@ export function TemplateProvider({ children }: { children: ReactNode }) {
   const [catalog, setCatalog] = useState<TemplateCatalog | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sourceBase64, setSourceBase64] = useState<string | null>(null);
+  const [sourceFileName, setSourceFileName] = useState<string | null>(null);
 
   const persist = useCallback(
     async (next: TemplateCatalog | null) => {
       setCatalog(next);
-      if (user?.id && next) {
-        await AsyncStorage.setItem(cacheKey(user.id), JSON.stringify(next));
+      if (next) {
+        await AsyncStorage.setItem(LOCAL_CATALOG_KEY, JSON.stringify(next));
+        if (user?.id) {
+          await AsyncStorage.setItem(cacheKey(user.id), JSON.stringify(next));
+        }
       }
     },
     [user?.id],
   );
 
   const refresh = useCallback(async () => {
-    if (!isAuthenticated || !user?.id) {
-      setCatalog(null);
-      setIsLoading(false);
-      return;
-    }
     setIsLoading(true);
     setError(null);
     try {
-      const remote = await getTemplate();
-      if (remote) await persist(remote);
+      if (isAuthenticated && user?.id) {
+        const remote = await getTemplate();
+        if (remote) await persist(remote);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'No se pudo consultar la plantilla.');
-      // Keep the owner's last known catalog for offline rendering.
+      // Keep the local copy for offline rendering.
     } finally {
       setIsLoading(false);
     }
@@ -69,9 +77,22 @@ export function TemplateProvider({ children }: { children: ReactNode }) {
     let mounted = true;
     (async () => {
       setIsLoading(true);
+      const localCatalog = await AsyncStorage.getItem(LOCAL_CATALOG_KEY);
+      const localSource = await AsyncStorage.getItem(LOCAL_SOURCE_KEY);
+      if (localCatalog && mounted) {
+        try {
+          setCatalog(JSON.parse(localCatalog) as TemplateCatalog);
+          if (localSource) {
+            const parsed = JSON.parse(localSource) as { fileName: string; contentBase64: string };
+            setSourceFileName(parsed.fileName);
+            setSourceBase64(parsed.contentBase64);
+          }
+        } catch {
+          await AsyncStorage.removeItem(LOCAL_CATALOG_KEY);
+        }
+      }
       if (!user?.id) {
         if (mounted) {
-          setCatalog(null);
           setIsLoading(false);
         }
         return;
@@ -92,6 +113,21 @@ export function TemplateProvider({ children }: { children: ReactNode }) {
       mounted = false;
     };
   }, [refresh, user?.id]);
+
+  const uploadLocal = useCallback(
+    async (input: TemplateImportInput) => {
+      const next = await importTemplateLocally(input);
+      await persist(next);
+      await AsyncStorage.setItem(
+        LOCAL_SOURCE_KEY,
+        JSON.stringify({ fileName: input.fileName, contentBase64: input.contentBase64 }),
+      );
+      setSourceFileName(input.fileName);
+      setSourceBase64(input.contentBase64);
+      return next;
+    },
+    [persist],
+  );
 
   const upload = useCallback(
     async (input: TemplateImportInput) => {
@@ -116,7 +152,17 @@ export function TemplateProvider({ children }: { children: ReactNode }) {
 
   return (
     <TemplateContext.Provider
-      value={{ catalog, isLoading, error, refresh, upload, saveMappings }}
+      value={{
+        catalog,
+        isLoading,
+        error,
+        sourceBase64,
+        sourceFileName,
+        refresh,
+        uploadLocal,
+        upload,
+        saveMappings,
+      }}
     >
       {children}
     </TemplateContext.Provider>

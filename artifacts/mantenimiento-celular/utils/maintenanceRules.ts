@@ -300,7 +300,9 @@ export function getCloseEligibility(visit: Visit): CloseEligibility {
   const missingItems: string[] = [];
   const templateFields = visit.templateFields ?? [];
   const responses = visit.responses ?? {};
-  const hasTemplate = Boolean(visit.template?.id && templateFields.length > 0);
+  const hasTemplate = Boolean(
+    visit.demoOnly || (visit.template?.id && templateFields.length > 0),
+  );
   if (!hasTemplate) missingItems.push('Falta cargar la plantilla Excel original.');
   const requiredFields = templateFields.filter(
     field => field.required && !field.isTitle && field.editable !== false,

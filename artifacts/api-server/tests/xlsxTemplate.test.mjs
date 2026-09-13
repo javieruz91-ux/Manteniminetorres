@@ -17,6 +17,7 @@ const {
   PHOTO_SLOT_COUNT,
   embedEvidence,
   parseTemplate,
+  resolveLocalSeparators,
   patchTemplate,
   prepareBlankTemplate,
   verifyTemplate,
@@ -35,6 +36,13 @@ assert.ok(officialCatalog.catalog.some((field) => field.target === "REPORTE FOTO
 assert.ok(officialCatalog.catalog.some((field) => field.target === "REPORTE FOTOGRAFICO!A30:F31" && field.evidenceSlot === "observation"));
 assert.equal(officialCatalog.unmapped.some((candidate) => candidate.target === "REPORTE FOTOGRAFICO!__evidence__"), false);
 assert.deepEqual(officialCatalog.unmapped.map((candidate) => candidate.target), ["INFRAESTRUCTURA!D20"]);
+const localCatalog = resolveLocalSeparators(officialCatalog);
+assert.equal(localCatalog.ready, true);
+assert.deepEqual(localCatalog.unmapped, []);
+assert.ok(localCatalog.audit.some((event) =>
+  event.type === "candidate-auto-ignored" &&
+  event.target === "INFRAESTRUCTURA!D20",
+));
 
 // Structural contract confirmed against the owner-provided workbook fixture.
 // Keep it explicit so a future change cannot silently alter sheet names/order.
