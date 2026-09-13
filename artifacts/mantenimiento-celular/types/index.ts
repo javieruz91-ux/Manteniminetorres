@@ -37,6 +37,25 @@ export interface TemplateField {
   mapped?: boolean;
   /** UI classification; presentation cells remain in the catalog for export but are not questions. */
   logical?: boolean;
+  role?: 'presentation' | 'question' | 'additional';
+  questionId?: string;
+  questionLabel?: string;
+  row?: number;
+  observationTarget?: string | null;
+  defaultValue?: string;
+}
+
+export interface TemplateQuestion {
+  id: string;
+  sheet: string;
+  section: string;
+  subsection?: string;
+  row: number;
+  label: string;
+  statusTarget: string;
+  observationTarget: string | null;
+  field: TemplateField;
+  additionalFields: TemplateField[];
 }
 
 export interface TemplateUnmappedCell {
@@ -65,6 +84,7 @@ export interface TemplateDescriptor {
 export interface TemplateCatalog {
   descriptor: TemplateDescriptor;
   fields: TemplateField[];
+  questions?: TemplateQuestion[];
 }
 
 export interface VisitTemplatePin {

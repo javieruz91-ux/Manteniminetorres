@@ -26,24 +26,31 @@ const {
 const officialWorkbook = fileURLToPath(new URL("../../../attached_assets/Mantenimiento_Preventivo_a_Sitios_Celulares_REV2_(1)_1789252951099.xlsx", import.meta.url));
 const officialFixture = readFileSync(officialWorkbook);
 const officialCatalog = parseTemplate(officialFixture);
-assert.equal(officialCatalog.ready, false);
-assert.equal(officialCatalog.catalog.length, 1906);
-assert.equal(officialCatalog.unmapped.some((candidate) => candidate.target === "PLANTA HUAWEI!D8"), false);
-assert.ok(officialCatalog.catalog.some((field) => field.sheet === "PLANTA HUAWEI" && field.target === "PLANTA HUAWEI!D8" && field.responseType === "status"));
-assert.ok(officialCatalog.catalog.some((field) => field.sheet === "HOJA DE SEG"));
-assert.ok(officialCatalog.catalog.some((field) => field.sheet === "INFRAESTRUCTURA" && field.target === "INFRAESTRUCTURA!D15"));
-assert.equal(officialCatalog.catalog.filter((field) => field.sheet === "REPORTE FOTOGRAFICO" && field.evidenceSlot === "photo").length, 16);
-assert.ok(officialCatalog.catalog.some((field) => field.target === "REPORTE FOTOGRAFICO!A10:F27" && field.evidenceSlot === "photo"));
-assert.ok(officialCatalog.catalog.some((field) => field.target === "REPORTE FOTOGRAFICO!A30:F31" && field.evidenceSlot === "observation"));
-assert.equal(officialCatalog.unmapped.some((candidate) => candidate.target === "REPORTE FOTOGRAFICO!__evidence__"), false);
-assert.deepEqual(officialCatalog.unmapped.map((candidate) => candidate.target), ["INFRAESTRUCTURA!D20"]);
-const localCatalog = resolveLocalSeparators(officialCatalog);
-assert.equal(localCatalog.ready, true);
-assert.deepEqual(localCatalog.unmapped, []);
-assert.ok(localCatalog.audit.some((event) =>
-  event.type === "candidate-auto-ignored" &&
-  event.target === "INFRAESTRUCTURA!D20",
-));
+assert.equal(officialCatalog.ready, true);
+assert.deepEqual(
+  officialCatalog.catalog.filter((field) => field.sheet === "PRESENTACION").map((field) => field.label),
+  ["mnemónico", "mnemónicos del sitio", "nombre del sitio", "tipo de radiobase",
+    "región", "central", "dirección", "fecha", "ingeniero", "número de tarea"],
+);
+assert.equal(officialCatalog.catalog.filter((field) => field.sheet === "PRESENTACION").length, 10);
+assert.equal(new Set(officialCatalog.catalog.filter((field) => field.sheet === "PRESENTACION").map((field) => field.target)).size, 10);
+assert.equal(officialCatalog.catalog.some((field) => field.defaultValue === "46273"), false);
+assert.equal(officialCatalog.catalog.some((field) => field.label.includes("46273")), false);
+assert.equal(officialCatalog.catalog.some((field) => field.sheet === "HOJA DE SEG"), false);
+assert.equal(officialCatalog.catalog.some((field) => field.sheet === "REPORTE FOTOGRAFICO"), false);
+assert.equal(officialCatalog.catalog.some((field) => field.sheet === "base"), false);
+assert.deepEqual(
+  [...new Set(officialCatalog.questions.map((question) => question.sheet))],
+  ["(HW) ALARMAS DE FUERZA", "PLANTA HUAWEI", "INFRAESTRUCTURA",
+    "ELECTROMECANICA", "TIERRAS", "TRANSMISION"],
+);
+assert.equal(new Set(officialCatalog.catalog.map((field) => field.id)).size, officialCatalog.catalog.length);
+assert.equal(new Set(officialCatalog.questions.map((question) => question.label)).size, officialCatalog.questions.length);
+assert.equal(officialCatalog.catalog.some((field) => /^(ESTADO|ESTATUS|OBSERVACIONES)$/i.test(field.label)), false);
+assert.ok(officialCatalog.questions.every((question) => question.field.responseType === "status"));
+assert.ok(officialCatalog.catalog.some((field) => field.role === "additional"));
+assert.ok(officialCatalog.audit.some((event) => event.type === "presentation-summary" && event.expectedFields === 10));
+assert.ok(officialCatalog.audit.some((event) => event.type === "sheet-excluded" && event.sheet === "HOJA DE SEG"));
 
 // Structural contract confirmed against the owner-provided workbook fixture.
 // Keep it explicit so a future change cannot silently alter sheet names/order.
@@ -61,9 +68,10 @@ assert.deepEqual(EXPECTED_SHEETS, [
 ]);
 assert.equal(PHOTO_SLOT_COUNT, 16);
 
-// Check the beginning, middle, and end of every imported sheet. This catches
-// truncation that a total-count assertion alone would miss.
-for (const [sheet] of EXPECTED_SHEETS.slice(0, -1)) {
+// Check the beginning, middle, and end of every questionnaire sheet.
+for (const [sheet] of EXPECTED_SHEETS.filter(([name]) =>
+  ["(HW) ALARMAS DE FUERZA", "PLANTA HUAWEI", "INFRAESTRUCTURA",
+    "ELECTROMECANICA", "TIERRAS", "TRANSMISION"].includes(name))) {
   const fields = officialCatalog.catalog.filter((field) => field.sheet === sheet);
   assert.ok(fields.length > 0, `sheet ${sheet} must have imported fields`);
   for (const field of [fields[0], fields[Math.floor(fields.length / 2)], fields.at(-1)]) {
@@ -149,23 +157,19 @@ assert.equal(blankPhotoSheet.includes("photo-1"), false);
 
 const catalog = parseTemplate(source);
 assert.equal(catalog.catalog.length > 0, true);
-assert.equal(catalog.ready, false, "photo evidence and formula/blocker candidates must prevent readiness");
-for (const [name] of EXPECTED_SHEETS.slice(0, -1)) {
-  assert.equal(catalog.catalog.some((field) => field.sheet === name) || catalog.unmapped.some((field) => field.sheet === name), true, name);
-}
-assert.equal(catalog.unmapped.some((candidate) => candidate.sheet === "REPORTE FOTOGRAFICO"), true);
-assert.equal(catalog.audit.at(-1).totalCandidates, catalog.catalog.length + catalog.unmapped.length);
+assert.equal(catalog.ready, false, "a workbook without maintenance rows is not ready");
+assert.equal(catalog.questions.length, 0);
+assert.equal(catalog.unmapped.length, 0);
 
-const fields = catalog.catalog.filter((field) => field.sheet === "PRESENTACION");
-assert.equal(fields.length >= 1, true);
+const fields = officialCatalog.catalog.filter((field) => field.sheet === "PRESENTACION");
 const snapshot = { responses: Object.fromEntries(fields.slice(0, 2).map((field, index) => [field.id, index ? 42 : "texto"])) };
-const patched = patchTemplate(source, snapshot, fields.map((field) => ({ ...field, state: "mapped" })));
+const patched = patchTemplate(officialFixture, snapshot, fields.map((field) => ({ ...field, state: "mapped" })));
 const verification = verifyTemplate(patched.bytes, fields, patched.writtenTargets, patched.capturedValues);
 assert.equal(verification.valid, true);
 assert.deepEqual(patched.writtenTargets.sort(), fields.slice(0, 2).map((field) => field.target).sort());
 const patchedZip = join(dir, "patched.xlsx");
 writeFileSync(patchedZip, patched.bytes);
-assert.equal(execFileSync("unzip", ["-p", patchedZip, "xl/worksheets/sheet1.xml"], { encoding: "utf8" }).includes("<f>1+1</f>"), true);
+assert.equal(/<f\b/i.test(execFileSync("unzip", ["-p", patchedZip, "xl/worksheets/sheet1.xml"], { encoding: "utf8" })), true);
 
 // Responses are exact-id based; a coincidental label must not win. Ranges
 // preserve their identity while writing the top-left cell.

@@ -6,6 +6,7 @@ import type {
   TemplateField,
   TemplateUnmappedCell,
   TemplateEvidenceSlot,
+  TemplateQuestion,
 } from '../types';
 export {
   buildTemplateMappingsPatch,
@@ -154,8 +155,32 @@ function unwrapCatalog(value: any): TemplateCatalog | null {
     editable: field.editable !== false && field.state !== 'ignored',
     isTitle: Boolean(field.isTitle || field.role === 'title'),
     mapped: field.mapped !== false && field.state !== 'ignored',
+     role: field.role,
+     questionId: field.questionId,
+     questionLabel: field.questionLabel,
+     row: field.row == null ? undefined : Number(field.row),
+     logical: field.logical === undefined ? undefined : Boolean(field.logical),
+     observationTarget: field.observationTarget ?? null,
+     defaultValue: field.defaultValue == null ? undefined : String(field.defaultValue),
     };
   });
+  const fieldsById = new Map(normalizedFields.map((field) => [field.id, field]));
+  const normalizedQuestions: TemplateQuestion[] | undefined = Array.isArray(value.questions)
+    ? value.questions.map((question: any) => ({
+      id: String(question.id),
+      sheet: String(question.sheet ?? ''),
+      section: String(question.section ?? ''),
+      subsection: question.subsection == null ? undefined : String(question.subsection),
+      row: Number(question.row ?? 0),
+      label: String(question.label ?? ''),
+      statusTarget: String(question.statusTarget ?? ''),
+      observationTarget: question.observationTarget == null ? null : String(question.observationTarget),
+      field: fieldsById.get(String(question.field?.id)) ?? normalizedFields.find((field) => field.id === String(question.id))!,
+      additionalFields: Array.isArray(question.additionalFields)
+        ? question.additionalFields.map((field: any) => fieldsById.get(String(field.id))).filter(Boolean) as TemplateField[]
+        : [],
+    }))
+    : undefined;
   const unmappedCells: TemplateUnmappedCell[] = rawUnmapped
     .filter((cell: any) => cell.state !== 'ignored')
     .map((cell: any, i: number) => ({
@@ -201,7 +226,7 @@ function unwrapCatalog(value: any): TemplateCatalog | null {
     fields: Number(rawDescriptor.fields ?? rawDescriptor.totalFields ?? normalizedFields.length),
     unmappedCells,
   };
-  return { descriptor: result, fields: normalizedFields };
+  return { descriptor: result, fields: normalizedFields, questions: normalizedQuestions };
 }
 
 export function normalizeTemplateCatalog(value: unknown): TemplateCatalog | null {

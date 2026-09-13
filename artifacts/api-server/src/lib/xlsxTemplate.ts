@@ -28,6 +28,26 @@ export type TemplateField = {
   applicability: string; evidenceSlot: "photo" | "observation" | "none";
   target: string; sourceEvidence: string; confidence: number;
   state: "mapped" | "ignored" | "unresolved"; ignoreReason: string | null;
+  role?: "presentation" | "question" | "additional";
+  questionId?: string;
+  questionLabel?: string;
+  row?: number;
+  section?: string;
+  logical?: boolean;
+  observationTarget?: string | null;
+  defaultValue?: string;
+};
+export type TemplateQuestion = {
+  id: string;
+  sheet: string;
+  section: string;
+  subsection: string;
+  row: number;
+  label: string;
+  statusTarget: string;
+  observationTarget: string | null;
+  field: TemplateField;
+  additionalFields: TemplateField[];
 };
 export type TemplateCandidate = {
   target: string; sheet: string; reason: string; confidence: number;
@@ -36,6 +56,7 @@ export type TemplateCandidate = {
 export type TemplateCatalog = {
   catalog: TemplateField[]; unmapped: TemplateCandidate[];
   audit: Array<Record<string, unknown>>; ready: boolean;
+  questions?: TemplateQuestion[];
 };
 
 /** Local onboarding treats the known empty separator cell as non-operational. */
@@ -557,7 +578,261 @@ export function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+type CatalogCell = { ref: string; value: string; formula: boolean; row: number; col: number };
+
+function catalogNormalize(value: string): string {
+  return value.normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .replace(/\s+/g, " ").trim().toUpperCase();
+}
+
+function catalogIsHeader(value: string): boolean {
+  return /^(ESTADO|ESTATUS|STATUS|OBSERVACIONES?|FOTOGRAF[IÍ]A|N[ÚU]MERO|ESCENARIO|POSICI[ÓO]N|ID ALARM|LEYENDA DE ALARMA)$/i.test(value.trim());
+}
+
+function catalogIsInstruction(value: string): boolean {
+  const normalized = catalogNormalize(value);
+  return !normalized ||
+    /^(VERIFICAR CORRECTO FUNCIONAMIENTO|INDICAR EN ESTATUS|PARAMETROS DE ESTADO|PAR[AÁ]METROS DE ESTADO|REVISION |REVISI[ÓO]N |MANTENIMIENTO PREVENTIVO|DIRECCI[ÓO]N DE OPERACI[ÓO]N|SITIOS CELULARES)/.test(normalized);
+}
+
+function catalogMergedSecondary(
+  ref: string,
+  merged: Array<{ start: string; end: string }>,
+): boolean {
+  const match = /^([A-Z]+)(\d+)$/i.exec(ref);
+  if (!match) return false;
+  const col = colNumber(match[1]); const row = Number(match[2]);
+  return merged.some((range) => {
+    const startCol = colNumber(range.start.replace(/\d/g, ""));
+    const endCol = colNumber(range.end.replace(/\d/g, ""));
+    const startRow = Number(range.start.replace(/\D/g, ""));
+    const endRow = Number(range.end.replace(/\D/g, ""));
+    return row >= startRow && row <= endRow && col >= startCol && col <= endCol &&
+      range.start.toUpperCase() !== ref.toUpperCase();
+  });
+}
+
+function catalogAdditionalLabel(value: string): boolean {
+  const normalized = catalogNormalize(value);
+  if (!normalized || catalogIsHeader(value) || catalogIsInstruction(value)) return false;
+  return /:$/.test(value.trim()) ||
+    /^(MARCA|MODELO|TIPO|CANTIDAD|CAPACIDAD|NIVEL|ALIMENTACI[ÓO]N|FASE|ID .*ENLACE|PTA A|PTA B|NIVEL RX|ANOTAR|KVA|VAC|VDC|LITROS|VOLTAJE|AMPER|TEMPERATURA|HUMEDAD)/.test(normalized);
+}
+
+function catalogDate(serial: number): string {
+  return new Date(Math.round((serial - 25569) * 86400 * 1000)).toISOString().slice(0, 10);
+}
+
+/**
+ * Structural catalog importer. It intentionally does not inspect unlocked
+ * styles as a proxy for questions: the official workbook uses styles for
+ * layout, merged headings and empty output areas. A question is a real
+ * maintenance row, with one status destination and optional child values.
+ */
 export function parseTemplate(bytes: Buffer): TemplateCatalog {
+  const { entries } = zipEntries(bytes);
+  const sheets = workbookSheets(entries);
+  validateWorkbookStructure(entries);
+  const sharedEntry = entries.find((entry) => entry.name === "xl/sharedStrings.xml");
+  const sharedStrings = sharedEntry ? textNodes(xmlData(sharedEntry), "si") : [];
+  const audit: Array<Record<string, unknown>> = [];
+  const catalog: TemplateField[] = [];
+  const questions: TemplateQuestion[] = [];
+  const unmapped: TemplateCandidate[] = [];
+  const questionnaireSheets = new Set([
+    "(HW) ALARMAS DE FUERZA", "PLANTA HUAWEI", "INFRAESTRUCTURA",
+    "ELECTROMECANICA", "TIERRAS", "TRANSMISION",
+  ]);
+  const excludedSheets = new Set(["HOJA DE SEG", "REPORTE FOTOGRAFICO", "base"]);
+
+  const readCells = (entry: ZipEntry): Map<string, CatalogCell> => {
+    const cells = new Map<string, CatalogCell>();
+    for (const match of xmlData(entry).matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+      const head = match[1] ?? ""; const body = match[2] ?? "";
+      const ref = attr(head, "r"); if (!ref) continue;
+      const parts = /^([A-Z]+)(\d+)$/i.exec(ref); if (!parts) continue;
+      const type = attr(head, "t") ?? "";
+      const raw = textNodes(body, "v")[0] ?? textNodes(body, "t").join("");
+      cells.set(ref, {
+        ref, row: Number(parts[2]), col: colNumber(parts[1]),
+        value: type === "s" ? (sharedStrings[Number(raw)] ?? "") : unescapeXml(raw),
+        formula: /<f\b/i.test(body),
+      });
+    }
+    return cells;
+  };
+  const mergedRanges = (entry: ZipEntry) => [...xmlData(entry).matchAll(/<mergeCell\b[^>]*ref="([^"]+)"/gi)]
+    .map((match) => {
+      const [start, end = start] = match[1].split(":");
+      return { start, end };
+    });
+  const makeField = (
+    input: Omit<TemplateField, "state" | "ignoreReason" | "confidence">,
+  ): TemplateField => ({ ...input, state: "mapped", ignoreReason: null, confidence: 1 });
+
+  const presentationDefinitions: Array<[string, string, ResponseType, string, string[]]> = [
+    ["mnemónico", "A12", "text", "Mnemonico", []],
+    ["mnemónicos del sitio", "A13", "text", "Mnemonico(s) de sitio", []],
+    ["nombre del sitio", "A14", "text", "NOMBRE DE SITIO", []],
+    ["tipo de radiobase", "A15", "selection", "TIPO DE RADIOBASE INDOOR/OUTDOOR", ["INDOOR", "OUTDOOR"]],
+    ["región", "C18", "text", "Región:", []],
+    ["central", "C19", "text", "Central:", []],
+    ["dirección", "C20", "text", "Dirección:", []],
+    ["fecha", "C21", "date", "Fecha:", []],
+    ["ingeniero", "C22", "text", "Ingeniero que lo realizo:", []],
+    ["número de tarea", "C23", "text", "No de Tarea (WO):", []],
+  ];
+  const presentation = sheets.find((sheet) => sheet.name === "PRESENTACION");
+  const presentationCells = presentation
+    ? readCells(entries.find((entry) => entry.name === presentation.path)!)
+    : new Map<string, CatalogCell>();
+  for (const [label, target, responseType, sourceEvidence, options] of presentationDefinitions) {
+    const raw = presentationCells.get(target)?.value ?? "";
+    const isLabelCell = catalogNormalize(raw) === catalogNormalize(sourceEvidence);
+    const defaultValue = isLabelCell ? undefined
+      : responseType === "date" && raw !== "" && Number.isFinite(Number(raw))
+        ? catalogDate(Number(raw)) : raw || undefined;
+    const id = `PRESENTACION:general:${catalogNormalize(label).replace(/[^A-Z0-9]+/g, "-")}`;
+    catalog.push(makeField({
+      id, sheet: "PRESENTACION", section: "Datos generales", subsection: "",
+      key: label, label, responseType, options, required: true,
+      applicability: "general", evidenceSlot: "none", target: `PRESENTACION!${target}`,
+      sourceEvidence, role: "presentation", questionId: id,
+      questionLabel: label, row: Number(target.replace(/\D/g, "")), logical: true, defaultValue,
+    }));
+  }
+  audit.push({ type: "presentation-summary", expectedFields: 10, fields: presentationDefinitions.map(([label, target]) => ({ label, target })) });
+
+  for (const sheet of sheets) {
+    if (!questionnaireSheets.has(sheet.name)) {
+      audit.push({ type: "sheet-excluded", sheet: sheet.name, reason: excludedSheets.has(sheet.name) ? "Salida/base interna" : "No es una hoja de mantenimiento" });
+      continue;
+    }
+    const entry = entries.find((candidate) => candidate.name === sheet.path);
+    if (!entry) throw new Error(`Falta XML de la hoja ${sheet.name}`);
+    const cells = readCells(entry);
+    const merged = mergedRanges(entry);
+    const rows = new Map<number, Map<string, CatalogCell>>();
+    for (const cell of cells.values()) {
+      const row = rows.get(cell.row) ?? new Map<string, CatalogCell>();
+      row.set(cell.ref.replace(/\d/g, ""), cell);
+      rows.set(cell.row, row);
+    }
+    let section = sheet.name;
+    const usedLabels = new Map<string, number>();
+    const additionalTarget = (row: number, col: number): string | null => {
+      for (let offset = 1; offset <= 3; offset++) {
+        const ref = cellRef(row, col + offset);
+        const candidate = cells.get(ref);
+        if (candidate?.formula || candidate?.value.trim()) continue;
+        if (!catalogMergedSecondary(ref, merged)) return ref;
+      }
+      return null;
+    };
+    const addQuestion = (
+      row: number,
+      rawLabel: string,
+      sourceEvidence: string,
+      additionalLabels: Array<{ label: string; col: number; source: string }>,
+    ) => {
+      const cleanLabel = rawLabel.replace(/\s+/g, " ").trim();
+      if (!cleanLabel || catalogIsInstruction(cleanLabel) || catalogIsHeader(cleanLabel)) return;
+      const normalized = catalogNormalize(cleanLabel);
+      const count = (usedLabels.get(normalized) ?? 0) + 1;
+      usedLabels.set(normalized, count);
+      const label = count === 1 ? cleanLabel : `${cleanLabel} (renglón ${row})`;
+      const questionId = `${sheet.name}:question:${row}`;
+      const statusTarget = `${sheet.name}!D${row}`;
+      const observationTarget = `${sheet.name}!F${row}`;
+      const field = makeField({
+        id: questionId, sheet: sheet.name, section, subsection: "",
+        key: label, label, responseType: "status", options: ["OK", "NOK", "SC", "NA"],
+        required: true, applicability: "question", evidenceSlot: "none",
+        target: statusTarget, sourceEvidence, role: "question",
+        questionId, questionLabel: label, row, logical: true, observationTarget,
+      });
+      const additionalFields: TemplateField[] = [];
+      const additionalTargets = new Set<string>();
+      for (const additional of additionalLabels) {
+        const target = additionalTarget(row, additional.col);
+        if (!target || additionalTargets.has(target)) continue;
+        additionalTargets.add(target);
+        const additionalId = `${questionId}:additional:${target}`;
+        additionalFields.push(makeField({
+          id: additionalId, sheet: sheet.name, section, subsection: "",
+          key: additional.label, label: additional.label, responseType:
+            /CANTIDAD|N[ÚU]M|CAPACIDAD|NIVEL|VOLTAJE|AMPER|TEMP|%|KVA|VAC|VDC|LITROS/.test(catalogNormalize(additional.label))
+              ? "measurement" : "text",
+          options: [], required: false, applicability: "additional", evidenceSlot: "none",
+          target: `${sheet.name}!${target}`, sourceEvidence: additional.source,
+          role: "additional", questionId, questionLabel: label, row, logical: false,
+        }));
+      }
+      questions.push({
+        id: questionId, sheet: sheet.name, section, subsection: "", row, label,
+        statusTarget: field.target, observationTarget, field, additionalFields,
+      });
+      catalog.push(field, ...additionalFields);
+    };
+
+    for (const [rowNumber, rowCells] of [...rows.entries()].sort(([a], [b]) => a - b)) {
+      const a = rowCells.get("A")?.value.trim() ?? "";
+      const b = rowCells.get("B")?.value.trim() ?? "";
+      const c = rowCells.get("C")?.value.trim() ?? "";
+      const f = rowCells.get("F")?.value.trim() ?? "";
+      const g = rowCells.get("G")?.value.trim() ?? "";
+      const d = rowCells.get("D")?.value.trim() ?? "";
+      const hasSectionHeader = Boolean(b && (catalogNormalize(d) === "ESTADO" || catalogNormalize(f) === "OBSERVACIONES")) ||
+        Boolean(a && /^\d+(?:\.\d+)+$/.test(a) && b);
+      if (hasSectionHeader) {
+        section = b || a || section;
+        continue;
+      }
+      if (sheet.name === "(HW) ALARMAS DE FUERZA") {
+        if (a && b && /^\d+$/.test(a)) section = b;
+        if (c && f && g && !catalogIsInstruction(g)) {
+          addQuestion(rowNumber, `${section} · ${c} · ${g}`, `${section}; posición ${c}; alarma ${f}; ${g}`, []);
+        }
+        continue;
+      }
+      let label = "";
+      if (a && b) label = b;
+      else if (a && c && /^\d/.test(a) && !catalogIsInstruction(a)) label = `${a} · ${c}`;
+      if (!label || catalogIsHeader(label) || catalogIsInstruction(label) || d) continue;
+      if (catalogMergedSecondary(`B${rowNumber}`, merged)) continue;
+      const additionalLabels = [...rowCells.values()]
+        .filter((cell) => cell.col > 2 && cell.value.trim() && !cell.formula &&
+          !catalogIsHeader(cell.value) && !catalogIsInstruction(cell.value) &&
+          catalogAdditionalLabel(cell.value))
+        .map((cell) => ({ label: cell.value.trim().replace(/:$/, ""), col: cell.col, source: `${cell.ref}: ${cell.value.trim()}` }));
+      addQuestion(rowNumber, label, `Renglón ${rowNumber}: ${label}`, additionalLabels);
+    }
+  }
+
+  const ids = new Set<string>();
+  const primaryTargets = new Set<string>();
+  for (const field of catalog) {
+    if (ids.has(field.id)) throw new Error(`ID de catálogo duplicado: ${field.id}`);
+    ids.add(field.id);
+    if (!field.target || field.target.endsWith("!")) throw new Error(`Campo sin celda destino: ${field.id}`);
+    if (field.role !== "additional") {
+      if (primaryTargets.has(field.target)) throw new Error(`Destino de catálogo duplicado: ${field.target}`);
+      primaryTargets.add(field.target);
+    }
+  }
+  audit.push({
+    type: "catalog-summary",
+    presentationFields: presentationDefinitions.length,
+    totalQuestions: questions.length,
+    additionalFields: catalog.filter((field) => field.role === "additional").length,
+    mapped: catalog.length,
+    unresolved: 0,
+    excludedSheets: [...excludedSheets],
+  });
+  return { catalog, questions, unmapped, audit, ready: questions.length > 0 };
+}
+
+function parseTemplateLegacy(bytes: Buffer): TemplateCatalog {
   const { entries } = zipEntries(bytes);
   const sheets = workbookSheets(entries);
   validateWorkbookStructure(entries);

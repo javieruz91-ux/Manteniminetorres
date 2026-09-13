@@ -14,3 +14,9 @@ Exports must patch a clone of the original OOXML package, preserve unrelated par
 **Why:** Rebuilding with a spreadsheet library can drop styles, drawings, validations, print settings, and other OOXML parts; trusting client mappings also allows required fields to be bypassed.
 
 **How to apply:** Treat compatibility with the official binary as unverified until that exact file is imported and opened in target spreadsheet engines. Synthetic fixtures validate mechanics, not real-template fidelity.
+
+Questionnaires must be derived structurally by maintenance row: one question owns its status and observation destinations, while auxiliary values remain child fields. Do not infer questions from unlocked styles or neighboring labels.
+
+**Why:** The official workbook uses styles, merged layout cells, formulas, and repeated headers for presentation; cell-level heuristics turned titles, output sheets, and duplicate auxiliary cells into questions.
+
+**How to apply:** Keep general presentation fields explicit, exclude output/internal sheets before parsing, reject formulas and merged secondary cells as question sources, and preserve each child field's exact OOXML target under its owning row.

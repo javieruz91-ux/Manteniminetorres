@@ -65,6 +65,7 @@ function localDescriptor(
     fileName,
     sha256: sha256(bytes),
     catalog: parsed.catalog,
+    questions: parsed.questions ?? [],
     unmapped: parsed.unmapped,
     audit: parsed.audit,
   };
