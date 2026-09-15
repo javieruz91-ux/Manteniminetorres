@@ -114,6 +114,40 @@ assert.equal(
   false,
 );
 
+const electromechanicalQuestions = officialCatalog.questions.filter(
+  (question) => question.sheet === "ELECTROMECANICA",
+);
+const electromechanicalFields = officialCatalog.catalog.filter(
+  (field) => field.sheet === "ELECTROMECANICA",
+);
+const electromechanicalTargets = [
+  "G9", "I9", "G10", "J10", "G11", "G12", "G13", "J13", "G14",
+  "G15", "I15", "G16", "I16", "G17",
+  "G18", "J18", "G19", "J19", "G20", "G21", "J21", "G22", "J22",
+  "G37", "G38", "G39", "G40", "G44", "J45",
+  "F51", "I51", "G52", "G53", "G54", "G56", "G57", "G58", "G59",
+  "G63", "G64", "G65", "G66", "G67",
+  "C70", "C71", "G70", "G71", "G75", "G76",
+  "G81", "F82", "F83", "G87", "G129",
+].map((target) => `ELECTROMECANICA!${target}`);
+assert.equal(electromechanicalQuestions.length, 101);
+assert.equal(
+  electromechanicalFields.filter((field) => field.role === "standalone").length,
+  electromechanicalTargets.length,
+);
+assert.deepEqual(
+  electromechanicalFields.filter((field) => field.role === "standalone").map((field) => field.target),
+  electromechanicalTargets,
+);
+assert.equal(electromechanicalFields.some((field) => field.target === "ELECTROMECANICA!K44"), false);
+assert.equal(electromechanicalFields.some((field) => field.target === "ELECTROMECANICA!K51"), false);
+assert.equal(electromechanicalFields.some((field) => field.target === "ELECTROMECANICA!H82"), false);
+assert.equal(electromechanicalFields.some((field) => field.target === "ELECTROMECANICA!H83"), false);
+assert.equal(electromechanicalFields.some((field) => field.target === "ELECTROMECANICA!L10"), false);
+assert.equal(electromechanicalFields.some((field) => field.target === "ELECTROMECANICA!L13"), false);
+assert.equal(electromechanicalFields.some((field) => field.label === "ESTADO" || field.label === "OBSERVACIONES"), false);
+assert.ok(electromechanicalQuestions.every((question) => question.field.responseType === "status"));
+
 // Planta Huawei exposes only the nine real status rows. Relay mappings,
 // BATERY SUMARY, and alarm-reference tables are informational workbook text.
 const huaweiQuestions = officialCatalog.questions.filter(
