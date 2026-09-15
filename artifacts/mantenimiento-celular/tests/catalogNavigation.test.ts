@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCapturePages,
   catalogQuestions,
+  capturableFieldCount,
   completedQuestionCount,
   currentSectionQuestionIds,
   DEFAULT_PAGE_SIZE,
@@ -233,5 +234,17 @@ describe('navegación del catálogo por preguntas reales', () => {
     expect(presentationFields(activeCatalog.fields).filter(field =>
       ['región', 'central', 'dirección'].includes(field.label),
     )).toHaveLength(3);
+  });
+
+  it('distingue las preguntas reales de todos los campos capturables', () => {
+    const fields = [
+      { id: 'presentation', label: 'Sitio', sheet: 'PRESENTACION', section: '', type: 'text' as const, role: 'presentation' as const },
+      { id: 'question', label: 'Estado', sheet: 'ENERGIA', section: 'General', type: 'status' as const, role: 'question' as const },
+      { id: 'standalone', label: 'Foto', sheet: 'INFRAESTRUCTURA', section: 'General', type: 'text' as const, role: 'standalone' as const },
+      { id: 'additional', label: 'Medición', sheet: 'ENERGIA', section: 'General', type: 'measurement' as const, role: 'additional' as const },
+    ];
+
+    expect(catalogQuestions(fields)).toHaveLength(2);
+    expect(capturableFieldCount(fields)).toBe(2);
   });
 });

@@ -71,7 +71,7 @@ export function PhotoPicker({ photos, onAdd, onRemove, type, label, disabled = f
       <Text style={[styles.label, { color: colors.foreground }]}>{label}</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         {typePhotos.map(photo => (
-          <View key={photo.id} style={styles.photoContainer}>
+          <View key={photo.id} testID={`evidence-photo-${photo.id}`} style={styles.photoContainer}>
             <Image source={{ uri: photo.uri }} style={[styles.photo, { borderColor: colors.border }]} />
             {!disabled && (
               <TouchableOpacity

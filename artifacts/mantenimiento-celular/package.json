@@ -8,6 +8,7 @@
     "build": "node scripts/build.js",
     "serve": "node server/serve.js",
     "verify:web": "node scripts/verify-web.js",
+    "verify:web:persistence": "node scripts/verify-web-persistence.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -41,6 +42,7 @@
     "expo-symbols": "~57.0.1",
     "expo-system-ui": "~57.0.1",
     "expo-web-browser": "~57.0.3",
+    "playwright-core": "^1.63.0",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-native": "0.86.3",

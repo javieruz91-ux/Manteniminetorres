@@ -223,7 +223,11 @@ export default function DashboardScreen() {
             catalog?.fields ?? (item.demoOnly ? demoFields : []),
           );
           return (
-          <TouchableOpacity onPress={() => router.push(`/visit/${item.id}`)} activeOpacity={0.7}>
+          <TouchableOpacity
+            testID={`visit-card-${item.id}`}
+            onPress={() => router.push(`/visit/${item.id}`)}
+            activeOpacity={0.7}
+          >
             <Card style={styles.visitCard}>
               <View style={styles.cardHeader}>
                 <Text style={[styles.siteName, { color: colors.foreground }]}>

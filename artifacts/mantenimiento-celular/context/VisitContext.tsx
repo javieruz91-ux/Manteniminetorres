@@ -40,7 +40,9 @@ interface VisitContextValue {
   deleteVisit: (id: string) => Promise<void>;
   updatePointStatus: (visitId: string, sectionId: string, pointId: string, status: ChecklistStatus) => Promise<void>;
   saveFindingAndStatus: (visitId: string, pointId: string, sectionId: string, status: ChecklistStatus, finding: Finding | null) => Promise<void>;
+  updateFindingDraft: (visitId: string, pointId: string, patch: Partial<Finding>) => Promise<void>;
   updateResponse: (visitId: string, fieldId: string, value: unknown) => Promise<void>;
+  flushPendingWrites: () => Promise<void>;
   migrateVisitToActiveTemplate: (visitId: string) => Promise<boolean>;
   getVisit: (id: string) => Visit | undefined;
   savePhoto: (tempUri: string, visitId: string, photoId?: string) => Promise<string>;
@@ -166,9 +168,13 @@ export function VisitProvider({ children }: { children: ReactNode }) {
 
   // 1. Awaitable Persistence Barrier
   const updateAndPersist = useCallback((updater: (prev: Visit[]) => Visit[]): Promise<Visit[]> => {
+    const previousState = visitsRef.current;
+    const nextState = updater(previousState);
+    // Update the in-memory source immediately so controlled inputs never
+    // render an older response while the durable write is still in flight.
+    visitsRef.current = nextState;
+    setVisits(nextState);
     const nextPromise = persistQueue.current.catch(() => null).then(async () => {
-      const previousState = visitsRef.current;
-      const nextState = updater(previousState);
       const nextPhotoIds = new Set(
         nextState.flatMap(visit =>
           visit.findings.flatMap(finding => finding.photos.map(photo => photo.id)),
@@ -191,8 +197,6 @@ export function VisitProvider({ children }: { children: ReactNode }) {
         }))
       } : v);
       await AsyncStorage.setItem(currentNamespace, JSON.stringify(stateToSave));
-      visitsRef.current = nextState;
-      setVisits(nextState);
       await flushPhotoCleanup(nextState);
       return nextState;
     });
@@ -600,9 +604,10 @@ export function VisitProvider({ children }: { children: ReactNode }) {
         v.id === visitId
           ? (() => {
               const responses = { ...v.responses, [fieldId]: value };
+              const responseUpdatedVisit = { ...v, responses };
               return {
-                ...v,
-                ...getVisitConvenienceFields(v, fieldsForVisit(v)),
+                ...responseUpdatedVisit,
+                ...getVisitConvenienceFields(responseUpdatedVisit, fieldsForVisit(v)),
                 responses,
                 clientUpdatedAt: new Date().toISOString(),
                 operationId: Crypto.randomUUID(),
@@ -613,6 +618,35 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       );
     });
   };
+
+  const updateFindingDraft = async (
+    visitId: string,
+    pointId: string,
+    patch: Partial<Finding>,
+  ): Promise<void> => {
+    await updateAndPersist(prev => {
+      const existing = prev.find(v => v.id === visitId);
+      if (!existing) throw new Error('Visita no encontrada');
+      if (existing.lifecycleStatus === 'CERRADA') {
+        throw new Error('No se puede editar una visita cerrada');
+      }
+      return prev.map(v => v.id === visitId
+        ? {
+            ...v,
+            findings: v.findings.map(finding =>
+              finding.pointId === pointId ? { ...finding, ...patch } : finding,
+            ),
+            clientUpdatedAt: new Date().toISOString(),
+            operationId: Crypto.randomUUID(),
+            syncStatus: 'PENDIENTE' as const,
+          }
+        : v);
+    });
+  };
+
+  const flushPendingWrites = useCallback(async (): Promise<void> => {
+    await persistQueue.current;
+  }, []);
 
   const closeVisit = async (id: string, auditEvent: AuditEvent): Promise<void> => {
     await updateAndPersist(prev => {
@@ -1169,7 +1203,9 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       deleteVisit,
       updatePointStatus,
       saveFindingAndStatus,
+      updateFindingDraft,
       updateResponse,
+      flushPendingWrites,
       migrateVisitToActiveTemplate,
       getVisit,
       savePhoto,

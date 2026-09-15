@@ -10,11 +10,12 @@ import { FindingPriority, FindingState, Photo } from '@/types';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import * as Haptics from 'expo-haptics';
 import * as Crypto from 'expo-crypto';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function FindingModalScreen() {
   const { id, pointId, sectionId, status: requestedStatus } = useLocalSearchParams<{ id: string, pointId: string, sectionId: string, status?: string }>();
-  const { getVisit, saveFindingAndStatus, savePhoto } = useVisits();
+  const { getVisit, saveFindingAndStatus, savePhoto, updateFindingDraft } = useVisits();
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -33,6 +34,13 @@ export default function FindingModalScreen() {
   const [state, setState] = useState<FindingState>(existingFinding?.state || 'ABIERTO');
   const [photos, setPhotos] = useState<Photo[]>(existingFinding?.photos || []);
   const [isSaving, setIsSaving] = useState(false);
+
+  const persistDraft = (patch: Partial<import('@/types').Finding>) => {
+    if (isReadOnly) return;
+    void updateFindingDraft(id, pointId, patch).catch(error => {
+      console.error('No se pudo guardar el borrador del hallazgo', error);
+    });
+  };
 
   // Simple date format regex check YYYY-MM-DD
   const isValidDate = (dateString: string) => {
@@ -115,19 +123,27 @@ export default function FindingModalScreen() {
 
   const handleAddPhoto = (photo: Photo) => {
     if (isReadOnly) return;
-    setPhotos(prev => [...prev, photo]);
+    const nextPhotos = [...photos, photo];
+    setPhotos(nextPhotos);
+    persistDraft({ photos: nextPhotos });
   };
   
   const handleRemovePhoto = (photoId: string) => {
     if (isReadOnly) return;
-    setPhotos(prev => prev.filter(p => p.id !== photoId));
+    const nextPhotos = photos.filter(p => p.id !== photoId);
+    setPhotos(nextPhotos);
+    persistDraft({ photos: nextPhotos });
   };
 
   const PriorityBtn = ({ val }: { val: FindingPriority }) => (
     <Button
       title={val}
       variant={priority === val ? 'primary' : 'outline'}
-      onPress={() => !isReadOnly && setPriority(val)}
+      onPress={() => {
+        if (isReadOnly) return;
+        setPriority(val);
+        persistDraft({ priority: val });
+      }}
       style={styles.flexBtn}
       size="sm"
       disabled={isReadOnly}
@@ -138,7 +154,11 @@ export default function FindingModalScreen() {
     <Button
       title={val}
       variant={state === val ? (val === 'CORREGIDO' ? 'primary' : 'destructive') : 'outline'}
-      onPress={() => !isReadOnly && setState(val)}
+      onPress={() => {
+        if (isReadOnly) return;
+        setState(val);
+        persistDraft({ state: val });
+      }}
       style={styles.flexBtn}
       size="sm"
       disabled={isReadOnly}
@@ -150,9 +170,13 @@ export default function FindingModalScreen() {
       <KeyboardAwareScrollViewCompat contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) }}>
         <View style={styles.content}>
           <Input 
+            testID="finding-description"
             label="Descripción del problema" 
             value={description}
-            onChangeText={setDescription}
+            onChangeText={value => {
+              setDescription(value);
+              persistDraft({ description: value });
+            }}
             placeholder="Detalla lo que encontraste..."
             multiline
             numberOfLines={3}
@@ -179,17 +203,25 @@ export default function FindingModalScreen() {
           </View>
 
           <Input 
+            testID="finding-responsible"
             label="Responsable de corregir" 
             value={responsible}
-            onChangeText={setResponsible}
+            onChangeText={value => {
+              setResponsible(value);
+              persistDraft({ responsible: value });
+            }}
             placeholder="Nombre o rol"
             editable={!isReadOnly}
           />
 
           <Input 
+            testID="finding-commitment-date"
             label={state === 'CORREGIDO' ? "Fecha de corrección (YYYY-MM-DD)" : "Fecha compromiso (YYYY-MM-DD)"} 
             value={commitmentDate}
-            onChangeText={setCommitmentDate}
+            onChangeText={value => {
+              setCommitmentDate(value);
+              persistDraft({ commitmentDate: value });
+            }}
             placeholder="Ej. 2023-10-25"
             editable={!isReadOnly}
           />
@@ -231,7 +263,6 @@ export default function FindingModalScreen() {
   );
 }
 
-import * as FileSystem from 'expo-file-system/legacy';
 
 const styles = StyleSheet.create({
   content: {

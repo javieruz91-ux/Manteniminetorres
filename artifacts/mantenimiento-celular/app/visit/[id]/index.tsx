@@ -23,6 +23,7 @@ import type { ChecklistStatus, Finding, Photo, TemplateField } from '@/types';
 import {
   buildCapturePages,
   catalogQuestions,
+  capturableFieldCount,
   completedQuestionCount,
   currentSectionQuestionIds,
   DEFAULT_PAGE_SIZE,
@@ -92,6 +93,7 @@ export default function VisitDetailScreen() {
     updateResponse,
     updatePointStatus,
     saveFindingAndStatus,
+    flushPendingWrites,
     migrateVisitToActiveTemplate,
   } = useVisits();
   const { catalog } = useTemplate();
@@ -140,8 +142,15 @@ export default function VisitDetailScreen() {
   }
 
   const isReadOnly = visit.lifecycleStatus === 'CERRADA';
-  const realQuestionCount = allQuestions.length;
-  const completed = completedQuestionCount(allQuestions, visit);
+  const realQuestions = allQuestions.filter(question =>
+    question.field.role === 'question' ||
+    (question.field.role !== 'standalone' &&
+      question.field.sheet !== PRESENTATION_SHEET &&
+      question.field.type === 'status'),
+  );
+  const realQuestionCount = realQuestions.length;
+  const capturableFields = capturableFieldCount(activeFields);
+  const completed = completedQuestionCount(realQuestions, visit);
   const currentQuestions = selectedSheet === PRESENTATION_SHEET
     ? []
     : sectionQuestions(activeFields, selectedSheet, activeSection);
@@ -296,6 +305,9 @@ export default function VisitDetailScreen() {
             <Text style={{ color: colors.foreground }}>Progreso de preguntas reales</Text>
             <Text style={[styles.progressValue, { color: colors.primary }]}>{completed}/{realQuestionCount}</Text>
           </View>
+          <Text style={{ color: colors.mutedForeground }}>
+            Campos capturables en el formato: {capturableFields}
+          </Text>
           <View style={[styles.progressBackground, { backgroundColor: colors.muted }]}>
             <View style={[styles.progressFill, { width: `${progress * 100}%`, backgroundColor: colors.primary }]} />
           </View>
@@ -430,10 +442,15 @@ export default function VisitDetailScreen() {
           title="Guardar y continuar después"
           variant="ghost"
           icon={<Feather name="save" size={18} color={colors.primary} />}
-          onPress={() => router.replace('/')}
+          onPress={() => {
+            void (async () => {
+              await flushPendingWrites();
+              router.replace('/');
+            })();
+          }}
         />
         <Button
-          title={`Revisar resumen (${realQuestionCount} preguntas)`}
+          title={`Revisar resumen (${realQuestionCount} preguntas reales)`}
           variant="secondary"
           onPress={() => router.push(`/visit/${visit.id}/summary`)}
         />
@@ -463,6 +480,11 @@ function CaptureCard({
 }) {
   if (!visit) return null;
   const { field, additionalFields } = question;
+  const isChecklistQuestion = field.role === 'question' ||
+    (field.role !== 'standalone' &&
+      field.sheet !== PRESENTATION_SHEET &&
+      field.type === 'status');
+  const isDirectResponse = !isChecklistQuestion && field.role !== 'standalone';
   const finding = visit.findings.find(candidate => candidate.pointId === field.id);
   const fieldPhotos = responsePhotos(visit.responses[field.id]);
   return (
@@ -476,7 +498,7 @@ function CaptureCard({
         </View>
         {finding && <Feather name="alert-triangle" size={18} color={colors.warning} />}
       </View>
-      {field.role !== 'standalone' && field.type === 'status' && (
+      {isChecklistQuestion && field.type === 'status' && (
         <View style={styles.statusRow}>
           {statusOptions.map(option => {
             const selected = status === option.value;
@@ -510,8 +532,9 @@ function CaptureCard({
           })}
         </View>
       )}
-      {field.role !== 'standalone' && (
+      {isChecklistQuestion && (
         <Input
+          testID={`response-${questionObservationId(field.id)}`}
           label="Observación"
           value={String(visit.responses[questionObservationId(field.id)] ?? '')}
           editable={!readOnly}
@@ -532,15 +555,16 @@ function CaptureCard({
           onRemove={photoId => onValue(field.id, serializePhotos(fieldPhotos.filter(photo => photo.id !== photoId)))}
         />
       )}
-      {field.role === 'standalone' && field.evidenceSlot !== 'photo' && (
+      {(field.role === 'standalone' && field.evidenceSlot !== 'photo') || isDirectResponse ? (
         <AdditionalField
           field={field}
           value={visit.responses[field.id]}
           readOnly={readOnly}
           colors={colors}
+          testID={`response-${field.id}`}
           onValue={value => onValue(field.id, value)}
         />
-      )}
+      ) : null}
       {additionalFields.map(additional => (
         <AdditionalField
           key={additional.id}
@@ -548,15 +572,17 @@ function CaptureCard({
           value={visit.responses[additional.id]}
           readOnly={readOnly}
           colors={colors}
+          testID={`response-${additional.id}`}
           onValue={value => onValue(additional.id, value)}
         />
       ))}
-      {field.role !== 'standalone' && (status === 'NOK' || status === 'SC') && (
+      {isChecklistQuestion && (status === 'NOK' || status === 'SC') && (
         <View style={styles.findingBox}>
           <Text style={[styles.findingHint, { color: colors.warning }]}>
             Este punto requiere una descripción y al menos una fotografía.
           </Text>
           <Button
+            testID={`btn-finding-${field.id}`}
             title={finding?.description && finding.photos.length ? 'Editar hallazgo' : 'Completar hallazgo'}
             variant="outline"
             onPress={onFinding}
@@ -573,12 +599,14 @@ function AdditionalField({
   value,
   readOnly,
   colors,
+  testID,
   onValue,
 }: {
   field: TemplateField;
   value: unknown;
   readOnly: boolean;
   colors: any;
+  testID: string;
   onValue: (value: unknown) => void;
 }) {
   if (field.type === 'selection' && field.options?.length) {
@@ -589,6 +617,7 @@ function AdditionalField({
           {field.options.map(option => (
             <TouchableOpacity
               key={option}
+              testID={`${testID}-${option}`}
               disabled={readOnly}
               onPress={() => onValue(option)}
               style={[
@@ -608,6 +637,7 @@ function AdditionalField({
   }
   return (
     <Input
+      testID={testID}
       label={field.label}
       value={value == null ? '' : String(value)}
       editable={!readOnly}

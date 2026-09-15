@@ -58,6 +58,11 @@ export function catalogQuestions(fields: TemplateField[]): CaptureQuestion[] {
     }));
 }
 
+/** All editable fields shown to the operator, including real questions and standalone capture fields. */
+export function capturableFieldCount(fields: TemplateField[]): number {
+  return fields.filter(field => field.role === 'question' || field.role === 'standalone').length;
+}
+
 export function presentationFields(fields: TemplateField[]): TemplateField[] {
   return fields
     .filter(field =>
