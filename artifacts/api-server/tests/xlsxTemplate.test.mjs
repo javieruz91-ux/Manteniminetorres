@@ -56,6 +56,17 @@ assert.ok(officialCatalog.audit.some((event) => event.type === "sheet-excluded" 
 const forceAlarmQuestions = officialCatalog.questions.filter(
   (question) => question.sheet === "(HW) ALARMAS DE FUERZA",
 );
+const forceAlarmFields = officialCatalog.catalog.filter(
+  (field) => field.sheet === "(HW) ALARMAS DE FUERZA",
+);
+assert.equal(forceAlarmQuestions.length, 55);
+assert.equal(forceAlarmFields.filter((field) => field.role === "standalone").length, 60);
+assert.deepEqual(
+  forceAlarmFields.filter((field) => field.role === "standalone").map((field) => field.target),
+  Array.from({ length: 6 }, (_, rowIndex) =>
+    [..."ABCDEFGHIJ"].map((column) => `(HW) ALARMAS DE FUERZA!${column}${76 + rowIndex}`),
+  ).flat(),
+);
 assert.equal(forceAlarmQuestions.some((question) => question.row === 8 || question.row === 75), false);
 assert.equal(
   officialCatalog.catalog.some(
@@ -66,6 +77,40 @@ assert.equal(
 );
 assert.equal(
   forceAlarmQuestions.some((question) => /POSICI[ÓO]N|LEYENDA DE ALARMA|ALARMAS EXTERNAS ADICIONALES/i.test(question.label)),
+  false,
+);
+assert.equal(
+  forceAlarmFields.some((field) => field.label === "Elemento monitoreado" || field.label === "ESTATUS"),
+  false,
+);
+
+const transmissionFields = officialCatalog.catalog.filter(
+  (field) => field.sheet === "TRANSMISION",
+);
+const transmissionQuestions = officialCatalog.questions.filter(
+  (question) => question.sheet === "TRANSMISION",
+);
+assert.equal(transmissionQuestions.length, 13);
+assert.deepEqual(
+  transmissionFields.filter((field) => field.role === "standalone").map((field) => field.target),
+  [
+    "TRANSMISION!G8", "TRANSMISION!F9", "TRANSMISION!G9",
+    "TRANSMISION!H9", "TRANSMISION!I9", "TRANSMISION!J9",
+    "TRANSMISION!G10", "TRANSMISION!F11", "TRANSMISION!G11",
+    "TRANSMISION!H11", "TRANSMISION!I11", "TRANSMISION!J11",
+    "TRANSMISION!C14",
+  ],
+);
+assert.equal(
+  transmissionFields.some((field) => field.target === "TRANSMISION!D8" && field.role === "question"),
+  true,
+);
+assert.equal(
+  transmissionFields.some((field) => field.target === "TRANSMISION!D14" && field.role === "question"),
+  true,
+);
+assert.equal(
+  transmissionFields.some((field) => field.target === "TRANSMISION!F8" && field.role === "additional"),
   false,
 );
 
@@ -305,6 +350,49 @@ const infrastructureXml = execFileSync(
 for (const field of mappedInfrastructureFields) {
   const ref = field.target.split("!")[1].split(":")[0];
   assert.ok(infrastructureXml.includes(`r="${ref}"`), `${field.target} missing from sheet4.xml`);
+}
+
+// Every Ericsson table cell and every Transmission link/router destination
+// must survive one complete export with unique values.
+const explicitFields = [...forceAlarmFields, ...transmissionFields].map((field, index) => ({
+  ...field,
+  state: "mapped",
+}));
+const explicitResponses = Object.fromEntries(
+  explicitFields.map((field, index) => [
+    field.id,
+    field.responseType === "selection" ? "OK" : `explicit-${index}`,
+  ]),
+);
+const explicitPatch = patchTemplate(
+  officialFixture,
+  { responses: explicitResponses },
+  explicitFields,
+);
+assert.equal(explicitPatch.writtenTargets.length, explicitFields.length);
+assert.equal(
+  verifyTemplate(
+    explicitPatch.bytes,
+    explicitFields,
+    explicitPatch.writtenTargets,
+    explicitPatch.capturedValues,
+  ).valid,
+  true,
+);
+for (const field of explicitFields) {
+  assert.equal(explicitPatch.capturedValues[field.target], explicitResponses[field.id].toString(), field.target);
+}
+const explicitZip = join(dir, "transmission-ericsson-complete.xlsx");
+writeFileSync(explicitZip, explicitPatch.bytes);
+for (const field of explicitFields) {
+  const sheetNumber = field.sheet === "TRANSMISION" ? 7 : 2;
+  const ref = field.target.split("!")[1].split(":")[0];
+  const sheetXml = execFileSync(
+    "unzip",
+    ["-p", explicitZip, `xl/worksheets/sheet${sheetNumber}.xml`],
+    { encoding: "utf8" },
+  );
+  assert.ok(sheetXml.includes(`r="${ref}"`), `${field.target} missing from exported XML`);
 }
 
 const photoField = {
