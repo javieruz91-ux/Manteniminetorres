@@ -429,6 +429,83 @@ for (const field of explicitFields) {
   assert.ok(sheetXml.includes(`r="${ref}"`), `${field.target} missing from exported XML`);
 }
 
+// Every Electromecánica auxiliary value must be written to its explicit
+// destination, while the neighboring labels and units remain unchanged.
+const mappedElectromechanicalFields = electromechanicalFields
+  .filter((field) => field.role === "standalone")
+  .map((field) => ({ ...field, state: "mapped" }));
+const electromechanicalResponses = Object.fromEntries(
+  mappedElectromechanicalFields.map((field, index) => [
+    field.id,
+    field.responseType === "selection"
+      ? (field.label.includes("Tipo de acometida") ? "Cuchillas" : "Jardín")
+      : `electro-${index}`,
+  ]),
+);
+const electromechanicalPatch = patchTemplate(
+  officialFixture,
+  { responses: electromechanicalResponses },
+  mappedElectromechanicalFields,
+);
+assert.equal(
+  electromechanicalPatch.writtenTargets.length,
+  electromechanicalTargets.length,
+);
+assert.equal(
+  verifyTemplate(
+    electromechanicalPatch.bytes,
+    mappedElectromechanicalFields,
+    electromechanicalPatch.writtenTargets,
+    electromechanicalPatch.capturedValues,
+  ).valid,
+  true,
+);
+for (const field of mappedElectromechanicalFields) {
+  assert.equal(
+    electromechanicalPatch.capturedValues[field.target],
+    electromechanicalResponses[field.id].toString(),
+    field.target,
+  );
+}
+const electromechanicalZip = join(dir, "electromecanica-complete.xlsx");
+writeFileSync(electromechanicalZip, electromechanicalPatch.bytes);
+assert.equal(
+  execFileSync("unzip", ["-t", electromechanicalZip], { encoding: "utf8" })
+    .includes("No errors detected"),
+  true,
+);
+const electromechanicalXml = execFileSync(
+  "unzip",
+  ["-p", electromechanicalZip, "xl/worksheets/sheet5.xml"],
+  { encoding: "utf8" },
+);
+for (const target of electromechanicalTargets) {
+  const ref = target.split("!")[1];
+  assert.ok(electromechanicalXml.includes(`r="${ref}"`), `${target} missing from sheet5.xml`);
+}
+for (const [ref, original] of [
+  ["F9", "Capacidad: _____ Amp."],
+  ["H9", "Tipo:       Termomagnético"],
+  ["J9", "Cuchillas"],
+  ["H10", "VAC"],
+  ["K10", "VAC"],
+  ["H12", "VAC"],
+  ["H13", "VAC"],
+  ["K13", "VAC"],
+  ["H14", "VAC"],
+  ["J44", "KVA"],
+  ["J51", "KVA"],
+  ["F67", "LITROS"],
+  ["G82", "VAC"],
+  ["G83", "VDC"],
+]) {
+  assert.ok(
+    electromechanicalXml.includes(`r="${ref}"`) &&
+      electromechanicalXml.includes(original),
+    `${ref} label/unit was not preserved`,
+  );
+}
+
 const photoField = {
   id: "photo-slot", sheet: "REPORTE FOTOGRAFICO", subsection: "Fotos", key: "photo-slot",
   label: "Foto", responseType: "observation", options: [], required: false, applicability: "",
