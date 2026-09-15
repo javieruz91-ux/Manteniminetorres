@@ -114,6 +114,16 @@ assert.equal(
   false,
 );
 
+const tierrasQuestions = officialCatalog.questions.filter(
+  (question) => question.sheet === "TIERRAS",
+);
+assert.equal(tierrasQuestions.length, 55);
+assert.ok(tierrasQuestions.every((question) => question.field.responseType === "status"));
+assert.equal(
+  new Set(tierrasQuestions.map((question) => question.field.target)).size,
+  tierrasQuestions.length,
+);
+
 const electromechanicalQuestions = officialCatalog.questions.filter(
   (question) => question.sheet === "ELECTROMECANICA",
 );
@@ -189,6 +199,12 @@ assert.equal(
   48,
 );
 assert.ok(infrastructureFields.some((field) => field.target === "INFRAESTRUCTURA!B60" && field.evidenceSlot === "photo"));
+assert.equal(
+  new Set(infrastructureFields
+    .filter((field) => /^INFRAESTRUCTURA![FGHI](4[89]|5[0-9])$/.test(field.target))
+    .map((field) => field.target.match(/\d+$/)?.[0])).size,
+  12,
+);
 const infrastructureRadiation = [
   { starts: [65, 75, 85], ret: true },
   { starts: [99, 109, 119], ret: true },
@@ -198,6 +214,8 @@ const infrastructureRadiation = [
   { starts: [224, 233, 242], ret: false },
   { starts: [253, 262, 271], ret: false },
 ];
+assert.equal(infrastructureRadiation.length, 7);
+assert.equal(infrastructureRadiation.flatMap(block => block.starts).length, 21);
 for (const block of infrastructureRadiation) {
   for (const start of block.starts) {
     for (let offset = 0; offset < 4; offset++) {
@@ -230,6 +248,14 @@ assert.deepEqual(EXPECTED_SHEETS, [
   ["base", 1, 1],
 ]);
 assert.equal(PHOTO_SLOT_COUNT, 16);
+assert.equal(
+  new Set(officialCatalog.catalog.map((field) => field.target)).size,
+  officialCatalog.catalog.length,
+);
+assert.equal(
+  officialCatalog.audit.filter(event => event.type === "sheet-excluded").length,
+  4,
+);
 
 // Check the beginning, middle, and end of every questionnaire sheet.
 for (const [sheet] of EXPECTED_SHEETS.filter(([name]) =>

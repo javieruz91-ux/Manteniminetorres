@@ -59,6 +59,31 @@ class VisitOperationChangedError extends Error {
   }
 }
 
+function parseResponsePhotos(value: unknown): Photo[] {
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter(photo =>
+          photo &&
+          typeof photo === 'object' &&
+          typeof photo.id === 'string' &&
+          typeof photo.uri === 'string',
+        ) as Photo[]
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function serializeResponsePhotos(photos: Photo[]): string {
+  return JSON.stringify(photos);
+}
+
+function isRemotePhotoField(field: TemplateField): boolean {
+  return field.role === 'standalone' && field.evidenceSlot === 'photo';
+}
+
 export function VisitProvider({ children }: { children: ReactNode }) {
   const [visits, setVisits] = useState<Visit[]>([]);
   const visitsRef = useRef<Visit[]>([]);
@@ -736,6 +761,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
           return current;
         };
 
+        const visitFields = fieldsForVisit(latestV);
         try {
           let allPhotosUploaded = true;
           for (const finding of latestV.findings) {
@@ -832,6 +858,103 @@ export function VisitProvider({ children }: { children: ReactNode }) {
             }
           }
 
+          // Standalone photo fields (for example the complete tower photo in
+          // INFRAESTRUCTURA) live in responses rather than in findings. Upload
+          // them through the same durable operation so remote export can read
+          // the object from visitPhotosTable.
+          for (const field of visitFields.filter(isRemotePhotoField)) {
+            for (const photo of parseResponsePhotos(latestV.responses[field.id])) {
+              if (photo.uploadStatus === 'uploaded') continue;
+
+              try {
+                const response = await fetch(photo.uri);
+                if (!response.ok) throw new Error(`No se pudo leer la foto (${response.status})`);
+                const blob = await response.blob();
+                const isPng = photo.uri.toLowerCase().includes('image/png') ||
+                  /\.png(?:$|[?#])/i.test(photo.uri);
+                const contentType: UploadUrlRequestContentType =
+                  isPng ? 'image/png' : 'image/jpeg';
+                const ext = isPng ? 'png' : 'jpeg';
+                const urlRes = await requestUploadUrl({
+                  name: `${photo.id}.${ext}`,
+                  size: blob.size || 1024,
+                  contentType,
+                  visitId: syncVisitId,
+                  sectionId: field.section || null,
+                  pointId: field.id,
+                  findingId: null,
+                  type: photo.type,
+                  localId: photo.id,
+                });
+
+                latestV = await persistOperationState(current => {
+                  const photos = parseResponsePhotos(current.responses[field.id]).map(item =>
+                    item.id === photo.id
+                      ? {
+                          ...item,
+                          uploadStatus: 'uploading' as UploadStatus,
+                          objectPath: urlRes.objectPath,
+                        }
+                      : item,
+                  );
+                  return {
+                    ...current,
+                    responses: {
+                      ...current.responses,
+                      [field.id]: serializeResponsePhotos(photos),
+                    },
+                  };
+                });
+
+                const uploadRes = await fetch(urlRes.uploadURL, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': contentType },
+                  body: blob,
+                });
+                if (!uploadRes.ok) {
+                  throw new Error(`La carga de la foto falló (${uploadRes.status})`);
+                }
+
+                latestV = await persistOperationState(current => {
+                  const photos = parseResponsePhotos(current.responses[field.id]).map(item =>
+                    item.id === photo.id
+                      ? {
+                          ...item,
+                          uploadStatus: 'uploaded' as UploadStatus,
+                          objectPath: urlRes.objectPath,
+                        }
+                      : item,
+                  );
+                  return {
+                    ...current,
+                    responses: {
+                      ...current.responses,
+                      [field.id]: serializeResponsePhotos(photos),
+                    },
+                  };
+                });
+              } catch (error) {
+                if (error instanceof VisitOperationChangedError) throw error;
+                console.error('Standalone photo upload error', error);
+                allPhotosUploaded = false;
+                await persistOperationState(current => {
+                  const photos = parseResponsePhotos(current.responses[field.id]).map(item =>
+                    item.id === photo.id
+                      ? { ...item, uploadStatus: 'failed' as UploadStatus }
+                      : item,
+                  );
+                  return {
+                    ...current,
+                    responses: {
+                      ...current.responses,
+                      [field.id]: serializeResponsePhotos(photos),
+                    },
+                  };
+                });
+              }
+            }
+          }
+
           if (!allPhotosUploaded) {
             throw new Error('No se pudieron cargar todas las fotos');
           }
@@ -854,21 +977,37 @@ export function VisitProvider({ children }: { children: ReactNode }) {
         }
 
         const currentV = latestV;
-        const visitFields = fieldsForVisit(currentV);
         const convenience = getVisitConvenienceFields(currentV, visitFields);
-        const photos: VisitPhoto[] = currentV.findings.flatMap(f =>
-          f.photos.map(p => ({
-            visitId: currentV.id,
-            sectionId: f.sectionId,
-            pointId: f.pointId,
-            findingId: f.id,
-            type: p.type,
-            localId: p.id,
-            objectPath: p.objectPath,
-            uploadStatus: 'uploaded' as VisitPhotoUploadStatus,
-            size: p.size,
-          })),
-        );
+        const photos: VisitPhoto[] = [
+          ...currentV.findings.flatMap(f =>
+            f.photos.map(p => ({
+              visitId: currentV.id,
+              sectionId: f.sectionId,
+              pointId: f.pointId,
+              findingId: f.id,
+              type: p.type,
+              localId: p.id,
+              objectPath: p.objectPath,
+              uploadStatus: 'uploaded' as VisitPhotoUploadStatus,
+              size: p.size,
+            })),
+          ),
+          ...visitFields
+            .filter(isRemotePhotoField)
+            .flatMap(field =>
+              parseResponsePhotos(currentV.responses[field.id]).map(p => ({
+                visitId: currentV.id,
+                sectionId: field.section || null,
+                pointId: field.id,
+                findingId: null,
+                type: p.type,
+                localId: p.id,
+                objectPath: p.objectPath,
+                uploadStatus: 'uploaded' as VisitPhotoUploadStatus,
+                size: p.size,
+              })),
+            ),
+        ];
 
         const input: VisitSyncInput & Record<string, unknown> = {
           visitId: currentV.id,
@@ -1068,6 +1207,29 @@ function mapSnapshotToLocal(
       ...all,
       ...section.points.reduce((fields, point) => ({ ...fields, ...(point as any).fields }), {}),
     }), {})) as Record<string, unknown>;
+  for (const field of remoteTemplateFields.filter(isRemotePhotoField)) {
+    const localPhotos = parseResponsePhotos(restoredResponses[field.id]);
+    const remotePhotos = sv.photos.filter(photo =>
+      !photo.findingId && photo.pointId === field.id,
+    );
+    if (remotePhotos.length === 0) continue;
+    const merged = new Map(localPhotos.map(photo => [photo.id, photo]));
+    for (const remotePhoto of remotePhotos) {
+      const previous = merged.get(remotePhoto.localId);
+      merged.set(remotePhoto.localId, {
+        id: remotePhoto.localId,
+        uri: remoteUris[remotePhoto.localId] ||
+          previous?.uri ||
+          `${FileSystem.documentDirectory}${remotePhoto.localId}`,
+        type: remotePhoto.type as PhotoType,
+        timestamp: previous?.timestamp || 0,
+        objectPath: remotePhoto.objectPath,
+        uploadStatus: remotePhoto.uploadStatus as UploadStatus,
+        size: remotePhoto.size,
+      });
+    }
+    restoredResponses[field.id] = serializeResponsePhotos([...merged.values()]);
+  }
   const findings: Finding[] = [];
   sv.sections.forEach(s => {
     s.points.forEach(p => {

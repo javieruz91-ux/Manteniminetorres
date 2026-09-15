@@ -14,3 +14,9 @@ Photo deletion is also a durable operation: serialize local cleanup-queue update
 **Why:** Concurrent provisional copies can overwrite an unprotected cleanup queue, while stale idempotent replays can otherwise delete photos introduced by a newer revision.
 
 **How to apply:** Protect referenced local IDs during cleanup, retry failed file deletion after hydration, and skip server reconciliation whenever the current visit version is newer than the replayed confirmation.
+
+Standalone evidence fields are part of the visit photo outbox even when their local value is serialized inside responses; use the field ID as the stable point relationship and restore the uploaded photo back into that response.
+
+**Why:** Keeping only finding photos in the wire snapshot silently drops evidence such as the complete tower photo during remote synchronization and export.
+
+**How to apply:** When adding a standalone photo field, cover local persistence, upload metadata, VisitPhoto serialization, server restoration, and its explicit workbook target together.
