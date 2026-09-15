@@ -479,6 +479,11 @@ const electromechanicalXml = execFileSync(
   ["-p", electromechanicalZip, "xl/worksheets/sheet5.xml"],
   { encoding: "utf8" },
 );
+const electromechanicalSharedStrings = execFileSync(
+  "unzip",
+  ["-p", electromechanicalZip, "xl/sharedStrings.xml"],
+  { encoding: "utf8" },
+);
 for (const target of electromechanicalTargets) {
   const ref = target.split("!")[1];
   assert.ok(electromechanicalXml.includes(`r="${ref}"`), `${target} missing from sheet5.xml`);
@@ -501,7 +506,7 @@ for (const [ref, original] of [
 ]) {
   assert.ok(
     electromechanicalXml.includes(`r="${ref}"`) &&
-      electromechanicalXml.includes(original),
+      electromechanicalSharedStrings.includes(original),
     `${ref} label/unit was not preserved`,
   );
 }
