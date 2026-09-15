@@ -474,6 +474,14 @@ assert.equal(
     .includes("No errors detected"),
   true,
 );
+const reopenedElectromechanicalCatalog = parseTemplate(electromechanicalPatch.bytes);
+assert.equal(reopenedElectromechanicalCatalog.ready, true);
+assert.equal(
+  reopenedElectromechanicalCatalog.questions.filter(
+    (question) => question.sheet === "ELECTROMECANICA",
+  ).length,
+  electromechanicalQuestions.length,
+);
 const electromechanicalXml = execFileSync(
   "unzip",
   ["-p", electromechanicalZip, "xl/worksheets/sheet5.xml"],
