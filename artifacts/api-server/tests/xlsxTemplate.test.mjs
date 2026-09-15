@@ -44,6 +44,7 @@ assert.deepEqual(
   ["(HW) ALARMAS DE FUERZA", "PLANTA HUAWEI", "INFRAESTRUCTURA",
     "ELECTROMECANICA", "TIERRAS", "TRANSMISION"],
 );
+assert.equal(officialCatalog.questions.length, 263);
 assert.equal(new Set(officialCatalog.catalog.map((field) => field.id)).size, officialCatalog.catalog.length);
 assert.equal(new Set(officialCatalog.questions.map((question) => question.label)).size, officialCatalog.questions.length);
 assert.equal(officialCatalog.catalog.some((field) => /^(ESTADO|ESTATUS|OBSERVACIONES)$/i.test(field.label)), false);
@@ -140,7 +141,20 @@ const electromechanicalTargets = [
   "C70", "C71", "G70", "G71", "G75", "G76",
   "G81", "F82", "F83", "G87", "G129",
 ].map((target) => `ELECTROMECANICA!${target}`);
-assert.equal(electromechanicalQuestions.length, 101);
+assert.equal(electromechanicalTargets.length, 54);
+assert.equal(electromechanicalQuestions.length, 102);
+const electromechanicalD32 = electromechanicalQuestions.find(
+  (question) => question.statusTarget === "ELECTROMECANICA!D32",
+);
+assert.ok(electromechanicalD32);
+assert.equal(electromechanicalD32.row, 32);
+assert.equal(
+  electromechanicalD32.label,
+  "Revisión y apriete de las conexiones del cableado.",
+);
+const electromechanicalRows = electromechanicalQuestions.map((question) => question.row);
+assert.ok(electromechanicalRows.indexOf(31) < electromechanicalRows.indexOf(32));
+assert.ok(electromechanicalRows.indexOf(32) < electromechanicalRows.indexOf(33));
 assert.equal(
   electromechanicalFields.filter((field) => field.role === "standalone").length,
   electromechanicalTargets.length,
@@ -507,6 +521,19 @@ assert.equal(
     (question) => question.sheet === "ELECTROMECANICA",
   ).length,
   electromechanicalQuestions.length,
+);
+const electromechanicalStatusPatch = patchTemplate(
+  officialFixture,
+  { responses: { [electromechanicalD32.field.id]: "NOK" } },
+  [{ ...electromechanicalD32.field, state: "mapped" }],
+);
+assert.deepEqual(
+  electromechanicalStatusPatch.writtenTargets,
+  ["ELECTROMECANICA!D32"],
+);
+assert.equal(
+  electromechanicalStatusPatch.capturedValues["ELECTROMECANICA!D32"],
+  "NOK",
 );
 const electromechanicalXml = execFileSync(
   "unzip",

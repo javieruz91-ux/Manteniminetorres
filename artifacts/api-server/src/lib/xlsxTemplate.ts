@@ -1171,9 +1171,10 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
       rawLabel: string,
       sourceEvidence: string,
       additionalLabels: Array<{ label: string; col: number; source: string }>,
+      forceQuestion = false,
     ) => {
       const cleanLabel = rawLabel.replace(/\s+/g, " ").trim();
-      if (!cleanLabel || catalogIsInstruction(cleanLabel) || catalogIsHeader(cleanLabel)) return;
+      if (!cleanLabel || (!forceQuestion && catalogIsInstruction(cleanLabel)) || catalogIsHeader(cleanLabel)) return;
       const normalized = catalogNormalize(cleanLabel);
       const count = (usedLabels.get(normalized) ?? 0) + 1;
       usedLabels.set(normalized, count);
@@ -1252,6 +1253,24 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
         continue;
       }
       if (sheet.name === "PLANTA HUAWEI" && !huaweiStatusRows.has(rowNumber)) {
+        continue;
+      }
+      // This exact workbook row is a real checklist item despite beginning
+      // with "Revisión", which is otherwise an instruction prefix. Keep the
+      // exception scoped to its official destination so generic headings are
+      // not promoted to questions.
+      if (
+        sheet.name === "ELECTROMECANICA" &&
+        rowNumber === 32 &&
+        b === "Revisión y apriete de las conexiones del cableado."
+      ) {
+        addQuestion(
+          rowNumber,
+          b,
+          `ELECTROMECANICA!D32: ${b}`,
+          [],
+          true,
+        );
         continue;
       }
       let label = "";
