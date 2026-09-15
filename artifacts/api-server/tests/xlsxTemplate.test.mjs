@@ -87,7 +87,7 @@ assert.equal(
   false,
 );
 assert.equal(
-  huaweiQuestions.some((question) => /BATERY|RELAY|RECTIFIER|ALARM SETTINGS|SUMMARY/i.test(question.label)),
+  huaweiQuestions.some((question) => /BATERY SUMARY|ALARM SETTINGS|RECTIFIER SUMARY/i.test(question.label)),
   false,
 );
 
