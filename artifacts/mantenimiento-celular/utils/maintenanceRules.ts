@@ -323,10 +323,11 @@ export function setPointStatus(
         },
   );
 
-  // A finding belongs to a NOK point. Leaving NOK must remove its photos too,
-  // rather than leaving detached evidence in local state or sync payloads.
+  // A finding belongs to a NOK or SC point. Leaving both statuses removes its
+  // photos too, rather than leaving detached evidence in local state or sync
+  // payloads.
   const findings =
-    status === 'NOK'
+    status === 'NOK' || status === 'SC'
       ? visit.findings
       : visit.findings.filter(
           (finding) =>
@@ -357,7 +358,7 @@ export function saveFindingAndStatus(
     status,
     dependencies,
   );
-  if (status !== 'NOK') return next;
+  if (status !== 'NOK' && status !== 'SC') return next;
   if (!finding) {
     return {
       ...next,
@@ -368,10 +369,16 @@ export function saveFindingAndStatus(
     };
   }
 
+  const stableFinding: Finding = {
+    ...finding,
+    id: `finding:${pointId}`,
+    pointId,
+    sectionId,
+  };
   const findings = next.findings.filter(
-    (candidate) => candidate.id !== finding.id && candidate.pointId !== pointId,
+    (candidate) => candidate.pointId !== pointId,
   );
-  return { ...next, findings: [...findings, finding] };
+  return { ...next, findings: [...findings, stableFinding] };
 }
 
 export interface CloseEligibility {
@@ -410,7 +417,7 @@ export function getCloseEligibility(visit: Visit, templateFields: TemplateField[
         allPointsEvaluated = false;
         missingItems.push(`Punto sin evaluar: ${section.title} - ${point.title}`);
       }
-      if (point.status !== 'NOK') continue;
+      if (point.status !== 'NOK' && point.status !== 'SC') continue;
 
       const finding = visit.findings.find(
         (candidate) =>
@@ -421,13 +428,13 @@ export function getCloseEligibility(visit: Visit, templateFields: TemplateField[
         missingItems.push(`Falta hallazgo para punto NOK: ${section.title} - ${point.title}`);
         continue;
       }
-      if (!finding.description || !finding.responsible || !isoDate.test(finding.commitmentDate)) {
+      if (!finding.description?.trim()) {
         allNokHaveFindings = false;
-        missingItems.push(`Datos de hallazgo incompletos en: ${section.title} - ${point.title}`);
+        missingItems.push(`Falta descripción del hallazgo: ${section.title} - ${point.title}`);
       }
-      if (!finding.photos.some((photo) => photo.type === 'ANTES')) {
+      if (!finding.photos.length) {
         allNokHaveFindings = false;
-        missingItems.push(`Falta foto ANTES en hallazgo: ${section.title} - ${point.title}`);
+        missingItems.push(`Falta fotografía en hallazgo: ${section.title} - ${point.title}`);
       }
       if (finding.state === 'CORREGIDO') {
         if (!finding.photos.some((photo) => photo.type === 'DESPUES')) {

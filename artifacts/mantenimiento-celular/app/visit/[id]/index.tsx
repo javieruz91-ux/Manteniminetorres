@@ -11,7 +11,6 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Crypto from 'expo-crypto';
 import { useVisits } from '@/context/VisitContext';
 import { useColors } from '@/hooks/useColors';
 import { Card } from '@/components/Card';
@@ -47,7 +46,7 @@ const statusOptions: Array<{ value: ChecklistStatus; label: string; icon: any }>
 
 function newFinding(questionId: string, sectionId: string): Finding {
   return {
-    id: Crypto.randomUUID(),
+    id: `finding:${questionId}`,
     pointId: questionId,
     sectionId,
     description: '',
@@ -158,7 +157,7 @@ export default function VisitDetailScreen() {
     const owner = sectionForQuestion(question.field.id);
     if (!owner) return;
     const existing = visit.findings.find(finding => finding.pointId === question.field.id);
-    if (status === 'NOK') {
+    if (status === 'NOK' || status === 'SC') {
       await saveFindingAndStatus(
         visit.id,
         question.field.id,
@@ -365,6 +364,10 @@ export default function VisitDetailScreen() {
               readOnly={isReadOnly}
               colors={colors}
               onStatus={status => void chooseStatus(question, status)}
+               onFinding={() => router.push({
+                 pathname: `/visit/${visit.id}/finding/${question.field.id}` as any,
+                 params: { sectionId: ownerSectionId(visit, question.field.id), status },
+               })}
               onValue={(fieldId, value) => {
                 if (!isReadOnly) void updateResponse(visit.id, fieldId, value);
               }}
@@ -433,6 +436,7 @@ function CaptureCard({
   readOnly: boolean;
   colors: any;
   onStatus: (status: ChecklistStatus) => void;
+  onFinding: () => void;
   onValue: (fieldId: string, value: unknown) => void;
 }) {
   if (!visit) return null;
@@ -503,10 +507,18 @@ function CaptureCard({
           onValue={value => onValue(additional.id, value)}
         />
       ))}
-      {status === 'NOK' && (
-        <Text style={[styles.findingHint, { color: colors.warning }]}>
-          Este punto tiene un hallazgo pendiente de completar en el resumen.
-        </Text>
+      {(status === 'NOK' || status === 'SC') && (
+        <View style={styles.findingBox}>
+          <Text style={[styles.findingHint, { color: colors.warning }]}>
+            Este punto requiere una descripción y al menos una fotografía.
+          </Text>
+          <Button
+            title={finding?.description && finding.photos.length ? 'Editar hallazgo' : 'Completar hallazgo'}
+            variant="outline"
+            onPress={onFinding}
+            disabled={readOnly}
+          />
+        </View>
       )}
     </View>
   );
