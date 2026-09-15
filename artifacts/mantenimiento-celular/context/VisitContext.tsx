@@ -4,7 +4,7 @@ import NetInfo from '@react-native-community/netinfo';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
 import { AppState } from 'react-native';
-import { Visit, Section, ChecklistStatus, Finding, Photo, AuditEvent, PhotoType, UploadStatus, VisitSnapshotLifecycleStatus, VisitSnapshotSyncStatus, FindingPriority, FindingState } from '../types';
+import { Visit, Section, ChecklistStatus, Finding, Photo, AuditEvent, PhotoType, UploadStatus, VisitSnapshotLifecycleStatus, VisitSnapshotSyncStatus, FindingPriority, FindingState, CURRENT_CATALOG_SCHEMA_VERSION } from '../types';
 import { syncVisit, requestUploadUrl, listVisits } from '@workspace/api-client-react';
 import { VisitSyncInput, VisitPhoto, VisitPhotoUploadStatus, UploadUrlRequestContentType, VisitSnapshot, VisitFindingState, VisitFindingPriority, VisitSectionStatus, VisitPointStatus } from '@workspace/api-client-react';
 import { Platform } from 'react-native';
@@ -386,6 +386,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       id: catalog.descriptor.id,
       version: catalog.descriptor.version,
       hash: catalog.descriptor.hash,
+             schemaVersion: catalog.descriptor.schemaVersion,
     };
     void updateAndPersist(prev => prev.map(current => {
       const result = migrateVisitToCatalog(
@@ -462,6 +463,15 @@ export function VisitProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const createVisit = async (data: Partial<Visit>): Promise<string> => {
+    if (!catalog && !isDemoMode) {
+      throw new Error('Primero carga la plantilla Excel activa.');
+    }
+    if (
+      catalog &&
+      catalog.descriptor.schemaVersion !== CURRENT_CATALOG_SCHEMA_VERSION
+    ) {
+      throw new Error('La plantilla activa está desactualizada. Espera a que termine la actualización.');
+    }
     if (catalog && (!catalog.descriptor.ready || catalog.descriptor.unmappedCells.length > 0)) {
       throw new Error(
         'La plantilla tiene celdas editables sin mapear. Resuelve la auditoría antes de iniciar una visita.',
@@ -474,6 +484,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
             id: catalog.descriptor.id,
             version: catalog.descriptor.version,
             hash: catalog.descriptor.hash,
+            schemaVersion: catalog.descriptor.schemaVersion,
           }
         : undefined,
        templateFields: activeCatalogFields,
@@ -496,6 +507,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
         id: catalog.descriptor.id,
         version: catalog.descriptor.version,
         hash: catalog.descriptor.hash,
+        schemaVersion: catalog.descriptor.schemaVersion,
       });
       changed = result.changed;
       return result.visit;
@@ -1044,7 +1056,7 @@ function mapSnapshotToLocal(
   fallbackTemplateFields: TemplateField[] = [],
 ): Visit {
   const remoteTemplate = (sv as any).template as
-    | { version?: number; sha256?: string; id?: string; hash?: string }
+    | { version?: number; sha256?: string; id?: string; hash?: string; schemaVersion?: number }
     | null
     | undefined;
   const rawTemplateFields = (sv as any).templateFields as any[] | undefined;
@@ -1115,6 +1127,7 @@ function mapSnapshotToLocal(
           id: remoteTemplate.id || remoteTemplate.sha256 || remoteTemplate.hash || '',
           version: String(remoteTemplate.version ?? ''),
           hash: remoteTemplate.hash || remoteTemplate.sha256 || '',
+          schemaVersion: Number(remoteTemplate.schemaVersion ?? CURRENT_CATALOG_SCHEMA_VERSION),
         }
       : undefined,
     responses: restoredResponses,

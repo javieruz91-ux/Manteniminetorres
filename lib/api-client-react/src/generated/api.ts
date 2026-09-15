@@ -1221,6 +1221,83 @@ export const useExportTemplate = <TError = ErrorType<ErrorEnvelope>,
       return useMutation(getExportTemplateMutationOptions(options));
     }
 
+export const getExportBlankTemplateUrl = () => {
+
+
+
+
+  return `/api/templates/blank`
+}
+
+/**
+ * @summary Download the audited original workbook as an empty template
+ */
+export const exportBlankTemplate = async ( options?: Parameters<typeof customFetch>[1]): Promise<TemplateExportResponse> => {
+
+  return customFetch<TemplateExportResponse>(getExportBlankTemplateUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getExportBlankTemplateQueryKey = () => {
+    return [
+    `/api/templates/blank`
+    ] as const;
+    }
+
+
+export const getExportBlankTemplateQueryOptions = <TData = Awaited<ReturnType<typeof exportBlankTemplate>>, TError = ErrorType<ErrorEnvelope>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof exportBlankTemplate>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getExportBlankTemplateQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof exportBlankTemplate>>> = ({ signal }) => exportBlankTemplate({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof exportBlankTemplate>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ExportBlankTemplateQueryResult = NonNullable<Awaited<ReturnType<typeof exportBlankTemplate>>>
+export type ExportBlankTemplateQueryError = ErrorType<ErrorEnvelope>
+
+
+/**
+ * @summary Download the audited original workbook as an empty template
+ */
+
+export function useExportBlankTemplate<TData = Awaited<ReturnType<typeof exportBlankTemplate>>, TError = ErrorType<ErrorEnvelope>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof exportBlankTemplate>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getExportBlankTemplateQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
 export const getRequestUploadUrlUrl = () => {
 
 

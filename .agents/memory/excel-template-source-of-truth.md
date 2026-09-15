@@ -20,3 +20,9 @@ Questionnaires must be derived structurally by maintenance row: one question own
 **Why:** The official workbook uses styles, merged layout cells, formulas, and repeated headers for presentation; cell-level heuristics turned titles, output sheets, and duplicate auxiliary cells into questions.
 
 **How to apply:** Keep general presentation fields explicit, exclude output/internal sheets before parsing, reject formulas and merged secondary cells as question sources, and preserve each child field's exact OOXML target under its owning row.
+
+The active catalog has an explicit schema version. A cached catalog with an older schema must never create a new visit; on web it is replaced from the canonical trial source, and existing visits are migrated by stable response identity.
+
+**Why:** AsyncStorage can outlive parser fixes, so checking only the workbook hash or template revision allows a legacy duplicate catalog to remain active indefinitely.
+
+**How to apply:** Compare schema version and source hash before accepting cached or remote catalogs, preserve legacy response keys during migration, and render new visits only from the active canonical catalog.

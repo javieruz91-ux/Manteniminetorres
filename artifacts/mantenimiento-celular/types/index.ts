@@ -3,6 +3,7 @@ export type FindingPriority = 'BAJA' | 'MEDIA' | 'ALTA' | 'CRITICA';
 export type FindingState = 'ABIERTO' | 'CORREGIDO';
 export type VisitSnapshotLifecycleStatus = 'BORRADOR' | 'ABIERTA' | 'CERRADA' | 'REABIERTA';
 export type VisitSnapshotSyncStatus = 'PENDIENTE' | 'SINCRONIZANDO' | 'SINCRONIZADO' | 'ERROR';
+export const CURRENT_CATALOG_SCHEMA_VERSION = 2;
 
 export type TemplateFieldType =
   | 'text'
@@ -71,6 +72,7 @@ export interface TemplateUnmappedCell {
 export interface TemplateDescriptor {
   id: string;
   version: string;
+  schemaVersion: number;
   hash: string;
   fileName: string;
   uploadedAt: string;
@@ -91,6 +93,7 @@ export interface VisitTemplatePin {
   id: string;
   version: string;
   hash: string;
+  schemaVersion: number;
 }
 
 export type PhotoType = 'ANTES' | 'DESPUES' | 'GENERAL';

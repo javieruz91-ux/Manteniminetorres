@@ -8,6 +8,7 @@ import type {
   TemplateEvidenceSlot,
   TemplateQuestion,
 } from '../types';
+import { shouldReplaceCachedCatalog } from '../utils/catalogMigration';
 export {
   buildTemplateMappingsPatch,
   getTemplateExportBlockReason,
@@ -206,6 +207,9 @@ function unwrapCatalog(value: any): TemplateCatalog | null {
         `version:${rawDescriptor.version ?? ''}`,
     ),
     version: String(rawDescriptor.version ?? ''),
+    schemaVersion: Number(
+      rawDescriptor.schemaVersion ?? rawDescriptor.catalogSchemaVersion ?? 1,
+    ),
     hash: String(rawDescriptor.hash ?? rawDescriptor.sha256 ?? ''),
     fileName: String(rawDescriptor.fileName ?? rawDescriptor.name ?? ''),
     uploadedAt: String(rawDescriptor.uploadedAt ?? rawDescriptor.createdAt ?? ''),
@@ -232,6 +236,8 @@ function unwrapCatalog(value: any): TemplateCatalog | null {
 export function normalizeTemplateCatalog(value: unknown): TemplateCatalog | null {
   return unwrapCatalog(value);
 }
+
+export { shouldReplaceCachedCatalog };
 
 export async function getTemplate(): Promise<TemplateCatalog | null> {
   let value: any;

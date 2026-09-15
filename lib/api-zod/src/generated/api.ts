@@ -467,6 +467,7 @@ export const GetVisitResponse = zod.object({
  */
 export const getCurrentTemplateResponseVersionMin = 0;
 
+
 export const getCurrentTemplateResponseCatalogItemConfidenceMin = 0;
 export const getCurrentTemplateResponseCatalogItemConfidenceMax = 1;
 
@@ -478,6 +479,7 @@ export const getCurrentTemplateResponseUnmappedItemConfidenceMax = 1;
 export const GetCurrentTemplateResponse = zod.object({
   "ready": zod.boolean(),
   "version": zod.number().int().min(getCurrentTemplateResponseVersionMin),
+  "schemaVersion": zod.number().int().min(1),
   "fileName": zod.string().nullable(),
   "sha256": zod.string().nullable(),
   "catalog": zod.array(zod.object({
@@ -524,6 +526,7 @@ export const ImportTemplateBody = zod.object({
 
 export const importTemplateResponseVersionMin = 0;
 
+
 export const importTemplateResponseCatalogItemConfidenceMin = 0;
 export const importTemplateResponseCatalogItemConfidenceMax = 1;
 
@@ -535,6 +538,7 @@ export const importTemplateResponseUnmappedItemConfidenceMax = 1;
 export const ImportTemplateResponse = zod.object({
   "ready": zod.boolean(),
   "version": zod.number().int().min(importTemplateResponseVersionMin),
+  "schemaVersion": zod.number().int().min(1),
   "fileName": zod.string().nullable(),
   "sha256": zod.string().nullable(),
   "catalog": zod.array(zod.object({
@@ -604,6 +608,7 @@ export const PatchTemplateMappingsBody = zod.object({
 
 export const patchTemplateMappingsResponseVersionMin = 0;
 
+
 export const patchTemplateMappingsResponseCatalogItemConfidenceMin = 0;
 export const patchTemplateMappingsResponseCatalogItemConfidenceMax = 1;
 
@@ -615,6 +620,7 @@ export const patchTemplateMappingsResponseUnmappedItemConfidenceMax = 1;
 export const PatchTemplateMappingsResponse = zod.object({
   "ready": zod.boolean(),
   "version": zod.number().int().min(patchTemplateMappingsResponseVersionMin),
+  "schemaVersion": zod.number().int().min(1),
   "fileName": zod.string().nullable(),
   "sha256": zod.string().nullable(),
   "catalog": zod.array(zod.object({
@@ -658,6 +664,22 @@ export const ExportTemplateBody = zod.object({
 })
 
 export const ExportTemplateResponse = zod.object({
+  "fileName": zod.string(),
+  "contentBase64": zod.string(),
+  "mime": zod.string(),
+  "verification": zod.object({
+  "valid": zod.boolean(),
+  "sheets": zod.array(zod.string()),
+  "writtenTargets": zod.array(zod.string()),
+  "details": zod.array(zod.string()).optional()
+})
+})
+
+
+/**
+ * @summary Download the audited original workbook as an empty template
+ */
+export const ExportBlankTemplateResponse = zod.object({
   "fileName": zod.string(),
   "contentBase64": zod.string(),
   "mime": zod.string(),

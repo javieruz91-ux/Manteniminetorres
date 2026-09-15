@@ -18,7 +18,11 @@ import {
   type TemplateImportInput,
   type TemplateMapping,
 } from '@/lib/templateApi';
-import type { TemplateCatalog } from '@/types';
+import { shouldReplaceCachedCatalog } from '@/utils/catalogMigration';
+import {
+  CURRENT_CATALOG_SCHEMA_VERSION,
+  type TemplateCatalog,
+} from '@/types';
 
 const cacheKey = (ownerId: string) => `@mantenimiento_template_${ownerId}`;
 const LOCAL_CATALOG_KEY = '@mantenimiento_template_local';
@@ -74,7 +78,12 @@ export function TemplateProvider({ children }: { children: ReactNode }) {
     try {
       if (isAuthenticated && user?.id) {
         const remote = await getTemplate();
-        if (remote) await persist(remote);
+        if (
+          remote &&
+          remote.descriptor.schemaVersion >= CURRENT_CATALOG_SCHEMA_VERSION
+        ) {
+          await persist(remote);
+        }
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'No se pudo consultar la plantilla.');
@@ -90,22 +99,35 @@ export function TemplateProvider({ children }: { children: ReactNode }) {
       setIsLoading(true);
       const localCatalog = await AsyncStorage.getItem(LOCAL_CATALOG_KEY);
       const localSource = await AsyncStorage.getItem(LOCAL_SOURCE_KEY);
-      if (localCatalog && mounted) {
-        try {
-          setCatalog(JSON.parse(localCatalog) as TemplateCatalog);
-          if (localSource) {
-            const parsed = JSON.parse(localSource) as { fileName: string; contentBase64: string };
-            setSourceFileName(parsed.fileName);
-            setSourceBase64(parsed.contentBase64);
-          }
-        } catch {
-          await AsyncStorage.removeItem(LOCAL_CATALOG_KEY);
+      let cachedCatalog: TemplateCatalog | null = null;
+      let storedSource: { fileName: string; contentBase64: string } | null = null;
+      try {
+        if (localCatalog) {
+          cachedCatalog = normalizeTemplateCatalog(JSON.parse(localCatalog));
         }
+        if (localSource) {
+          const parsed = JSON.parse(localSource);
+          if (parsed?.fileName && parsed?.contentBase64) storedSource = parsed;
+        }
+      } catch {
+        await AsyncStorage.removeItem(LOCAL_CATALOG_KEY);
+        cachedCatalog = null;
       }
-      if (!localCatalog && Platform.OS === 'web') {
+
+      if (Platform.OS !== 'web' && cachedCatalog && mounted) {
+        setCatalog(cachedCatalog);
+      }
+      if (storedSource && mounted) {
+        setSourceFileName(storedSource.fileName);
+        setSourceBase64(storedSource.contentBase64);
+      }
+
+      let next: TemplateCatalog | null = null;
+      let nextSource = storedSource;
+      let canonicalFileName: string | null = null;
+      if (Platform.OS === 'web') {
         let fileName = 'Mantenimiento_Preventivo_a_Sitios_Celulares.xlsx';
         let contentBase64: string | null = null;
-        let next: TemplateCatalog | null = null;
         const apiBase = process.env.EXPO_PUBLIC_DOMAIN
           ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
           : '';
@@ -115,12 +137,40 @@ export function TemplateProvider({ children }: { children: ReactNode }) {
           });
           if (trialResponse.ok) {
             const trial = await trialResponse.json();
-            next = normalizeTemplateCatalog(trial);
-            fileName = trial.source?.fileName || fileName;
-            contentBase64 = trial.source?.contentBase64 || null;
+            const canonical = normalizeTemplateCatalog(trial);
+            const trialSourceFileName = trial.source?.fileName || fileName;
+            canonicalFileName = trialSourceFileName;
+            const isCustomSource = Boolean(
+              storedSource && storedSource.fileName !== trialSourceFileName,
+            );
+            if (!isCustomSource && canonical) {
+              next = canonical;
+              fileName = trialSourceFileName;
+              contentBase64 = trial.source?.contentBase64 || null;
+            }
           }
         } catch {
           // The static workbook fallback below still supports a published web server.
+        }
+
+        if (!next && storedSource &&
+            (!cachedCatalog ||
+              cachedCatalog.descriptor.schemaVersion < CURRENT_CATALOG_SCHEMA_VERSION)) {
+          try {
+            next = await importTemplateLocally({
+              fileName: storedSource.fileName,
+              contentBase64: storedSource.contentBase64,
+              replace: true,
+            });
+            contentBase64 = storedSource.contentBase64;
+            fileName = storedSource.fileName;
+          } catch {
+            // Keep a current cached catalog if parsing is temporarily unavailable.
+          }
+        }
+        if (!next && cachedCatalog &&
+            cachedCatalog.descriptor.schemaVersion >= CURRENT_CATALOG_SCHEMA_VERSION) {
+          next = cachedCatalog;
         }
         if (!next) {
           const response = await fetch(
@@ -138,19 +188,38 @@ export function TemplateProvider({ children }: { children: ReactNode }) {
             });
           }
         }
-        if (next && contentBase64) {
+        if (next && mounted) {
+          const shouldPersist = shouldReplaceCachedCatalog(cachedCatalog, next) ||
+            (canonicalFileName !== null && storedSource?.fileName === canonicalFileName);
+          if (shouldPersist) await persist(next);
+          if (contentBase64) {
+            nextSource = { fileName, contentBase64 };
+            await AsyncStorage.setItem(LOCAL_SOURCE_KEY, JSON.stringify(nextSource));
+          }
+          setCatalog(next);
+          if (nextSource) {
+            setSourceFileName(nextSource.fileName);
+            setSourceBase64(nextSource.contentBase64);
+          }
+        }
+      } else if (
+        cachedCatalog &&
+        cachedCatalog.descriptor.schemaVersion < CURRENT_CATALOG_SCHEMA_VERSION &&
+        storedSource
+      ) {
+        try {
+          next = await importTemplateLocally({
+            fileName: storedSource.fileName,
+            contentBase64: storedSource.contentBase64,
+            replace: true,
+          });
           if (mounted) {
             await persist(next);
-            await AsyncStorage.setItem(
-              LOCAL_SOURCE_KEY,
-              JSON.stringify({
-                fileName,
-                contentBase64,
-              }),
-            );
-            setSourceFileName(fileName);
-            setSourceBase64(contentBase64);
+            setCatalog(next);
           }
+        } catch {
+          // Offline native sessions keep the old draft readable but cannot create
+          // a new visit until the canonical schema is available.
         }
       }
       if (!user?.id) {
@@ -162,7 +231,13 @@ export function TemplateProvider({ children }: { children: ReactNode }) {
       const cached = await AsyncStorage.getItem(cacheKey(user.id));
       if (cached && mounted) {
         try {
-          setCatalog(JSON.parse(cached) as TemplateCatalog);
+          const normalized = normalizeTemplateCatalog(JSON.parse(cached));
+          if (
+            normalized &&
+            normalized.descriptor.schemaVersion >= CURRENT_CATALOG_SCHEMA_VERSION
+          ) {
+            setCatalog(normalized);
+          }
         } catch {
           await AsyncStorage.removeItem(cacheKey(user.id));
         }

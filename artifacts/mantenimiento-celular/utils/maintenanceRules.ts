@@ -7,6 +7,7 @@ import {
   TemplateField,
   Section,
   ChecklistPoint,
+  CURRENT_CATALOG_SCHEMA_VERSION,
 } from '../types';
 import { stableTemplateFieldKey, templateFieldRef } from './templateFields';
 
@@ -19,6 +20,7 @@ export interface DraftInput {
     id: string;
     version: string;
     hash: string;
+    schemaVersion?: number;
   };
   templateFields?: TemplateField[];
 }
@@ -56,7 +58,12 @@ export function createDraftVisit(
     closedAt: null,
     reopenedAt: null,
     serverVersion: 0,
-    template: data.template,
+    template: data.template
+      ? {
+          ...data.template,
+          schemaVersion: data.template.schemaVersion ?? CURRENT_CATALOG_SCHEMA_VERSION,
+        }
+      : undefined,
     responses: Object.fromEntries(templateFields.map(field => [field.id, ''])),
     sections: createImportedSections(templateFields),
     findings: [],
@@ -235,13 +242,20 @@ export function migrateVisitToCatalog(
   }
   const next: Visit = {
     ...input,
-    template,
+    template: {
+      ...template,
+      schemaVersion: template.schemaVersion ?? CURRENT_CATALOG_SCHEMA_VERSION,
+    },
     responses,
     sections: sectionsForCatalog(fields, responses),
-    clientUpdatedAt: input.template?.hash === template.hash && legacyFields.length === 0
+    clientUpdatedAt: input.template?.hash === template.hash &&
+      input.template?.schemaVersion === (template.schemaVersion ?? CURRENT_CATALOG_SCHEMA_VERSION) &&
+      legacyFields.length === 0
       ? input.clientUpdatedAt
       : now(),
-    catalogMigrationNotice: input.template?.hash === template.hash && legacyFields.length === 0
+    catalogMigrationNotice: input.template?.hash === template.hash &&
+      input.template?.schemaVersion === (template.schemaVersion ?? CURRENT_CATALOG_SCHEMA_VERSION) &&
+      legacyFields.length === 0
       ? input.catalogMigrationNotice
       : 'Esta visita fue actualizada con la plantilla completa.',
   };
@@ -251,6 +265,7 @@ export function migrateVisitToCatalog(
     visit: withoutLegacyFields,
     changed: legacyFields.length > 0 ||
       input.template?.hash !== template.hash ||
+      input.template?.schemaVersion !== (template.schemaVersion ?? CURRENT_CATALOG_SCHEMA_VERSION) ||
       fields.some(field => !Object.prototype.hasOwnProperty.call(sourceResponses, field.id)),
   };
 }
@@ -267,6 +282,12 @@ export function continueDraftVisit(
   return {
     ...visit,
     ...data,
+    template: data.template
+      ? {
+          ...data.template,
+          schemaVersion: data.template.schemaVersion ?? CURRENT_CATALOG_SCHEMA_VERSION,
+        }
+      : visit.template,
     clientUpdatedAt: now(),
     operationId: id(),
     syncStatus: 'PENDIENTE',

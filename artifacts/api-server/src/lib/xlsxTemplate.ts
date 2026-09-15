@@ -18,6 +18,7 @@ export const EXPECTED_SHEETS = [
   ["base", 1, 1],
 ] as const;
 export const PHOTO_SLOT_COUNT = 16;
+export const CATALOG_SCHEMA_VERSION = 2;
 const PHOTO_SLOT_START_ROW = 3;
 
 export type ResponseType =
@@ -57,6 +58,7 @@ export type TemplateCatalog = {
   catalog: TemplateField[]; unmapped: TemplateCandidate[];
   audit: Array<Record<string, unknown>>; ready: boolean;
   questions?: TemplateQuestion[];
+  schemaVersion?: number;
 };
 
 /** Local onboarding treats the known empty separator cell as non-operational. */
@@ -644,6 +646,7 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
     "ELECTROMECANICA", "TIERRAS", "TRANSMISION",
   ]);
   const excludedSheets = new Set(["HOJA DE SEG", "REPORTE FOTOGRAFICO", "base"]);
+  audit.push({ type: "catalog-schema", version: CATALOG_SCHEMA_VERSION });
 
   const readCells = (entry: ZipEntry): Map<string, CatalogCell> => {
     const cells = new Map<string, CatalogCell>();
@@ -829,7 +832,14 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
     unresolved: 0,
     excludedSheets: [...excludedSheets],
   });
-  return { catalog, questions, unmapped, audit, ready: questions.length > 0 };
+  return {
+    catalog,
+    questions,
+    unmapped,
+    audit,
+    ready: questions.length > 0,
+    schemaVersion: CATALOG_SCHEMA_VERSION,
+  };
 }
 
 function parseTemplateLegacy(bytes: Buffer): TemplateCatalog {

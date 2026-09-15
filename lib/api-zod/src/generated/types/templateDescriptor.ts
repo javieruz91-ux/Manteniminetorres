@@ -13,6 +13,8 @@ export interface TemplateDescriptor {
   ready: boolean;
   /** @minimum 0 */
   version: number;
+  /** @minimum 1 */
+  schemaVersion: number;
   /** @nullable */
   fileName: string | null;
   /** @nullable */

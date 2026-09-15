@@ -6,13 +6,15 @@ import {
   currentSectionQuestionIds,
   DEFAULT_PAGE_SIZE,
   filterCaptureQuestions,
+  presentationFields,
   questionnaireSections,
   questionnaireSheets,
   questionObservationId,
   setStatusInResponse,
 } from '../utils/catalogNavigation';
+import { shouldReplaceCachedCatalog } from '../utils/catalogMigration';
 import { createDraftVisit } from '../utils/maintenanceRules';
-import type { TemplateField } from '../types';
+import type { TemplateCatalog, TemplateField } from '../types';
 
 const sheets = [
   '(HW) ALARMAS DE FUERZA',
@@ -43,6 +45,43 @@ function questionFields(total = 281): TemplateField[] {
       observationTarget: `${sheet}!F${index + 1}`,
     };
   });
+}
+
+function canonicalFields(): TemplateField[] {
+  const presentation = [
+    'mnemónico',
+    'mnemónicos del sitio',
+    'nombre del sitio',
+    'tipo de radiobase',
+    'región',
+    'central',
+    'dirección',
+    'fecha',
+    'ingeniero',
+    'número de tarea',
+  ].map((label, index): TemplateField => ({
+    id: `PRESENTACION:general:${index + 1}`,
+    label,
+    sheet: 'PRESENTACION',
+    section: 'Datos generales',
+    type: index === 7 ? 'date' : 'text',
+    role: 'presentation',
+    logical: true,
+    target: { cell: `C${18 + index}` },
+  }));
+  const questions = questionFields();
+  const additional = Array.from({ length: 50 }, (_, index): TemplateField => ({
+    id: `${questions[index % questions.length].id}:additional:X${index + 1}`,
+    label: `Dato adicional ${index + 1}`,
+    sheet: questions[index % questions.length].sheet,
+    section: questions[index % questions.length].section,
+    type: 'measurement',
+    role: 'additional',
+    logical: false,
+    questionId: questions[index % questions.length].id,
+    target: { cell: `X${index + 1}` },
+  }));
+  return [...presentation, ...questions, ...additional];
 }
 
 describe('navegación del catálogo por preguntas reales', () => {
@@ -123,5 +162,76 @@ describe('navegación del catálogo por preguntas reales', () => {
     expect(ids.length).toBeGreaterThan(0);
     expect(ids.every(id => !otherIds.includes(id))).toBe(true);
     expect(ids.length).toBeLessThan(281);
+  });
+
+  it('reemplaza el catálogo legado duplicado antes de crear una visita nueva', () => {
+    const canonical = canonicalFields();
+    const legacyFields = [
+      ...canonical,
+      ...canonical.filter(field => field.label === 'región' || field.label === 'central'),
+      ...questionFields(159),
+    ];
+    const legacyCatalog: TemplateCatalog = {
+      descriptor: {
+        id: 'legacy',
+        version: '1',
+        schemaVersion: 1,
+        hash: 'legacy-hash',
+        fileName: 'legacy.xlsx',
+        uploadedAt: '2026-01-01T00:00:00.000Z',
+        ready: true,
+        sheets: 10,
+        sections: 1,
+        fields: legacyFields.length,
+        unmappedCells: [],
+      },
+      fields: legacyFields,
+    };
+    const canonicalCatalog: TemplateCatalog = {
+      ...legacyCatalog,
+      descriptor: {
+        ...legacyCatalog.descriptor,
+        id: 'canonical',
+        version: '2',
+        schemaVersion: 2,
+        hash: 'canonical-hash',
+        fileName: 'oficial.xlsx',
+        fields: canonical.length,
+      },
+      fields: canonical,
+    };
+
+    expect(shouldReplaceCachedCatalog(legacyCatalog, canonicalCatalog)).toBe(true);
+    const activeCatalog = canonicalCatalog;
+    const visit = createDraftVisit({
+      template: {
+        id: activeCatalog.descriptor.id,
+        version: activeCatalog.descriptor.version,
+        hash: activeCatalog.descriptor.hash,
+        schemaVersion: activeCatalog.descriptor.schemaVersion,
+      },
+      templateFields: activeCatalog.fields,
+    });
+
+    expect(presentationFields(activeCatalog.fields)).toHaveLength(10);
+    expect(catalogQuestions(activeCatalog.fields)).toHaveLength(281);
+    expect(activeCatalog.fields.filter(field => field.role === 'additional')).toHaveLength(50);
+    expect(presentationFields(activeCatalog.fields).map(field => field.label)).toEqual([
+      'mnemónico',
+      'mnemónicos del sitio',
+      'nombre del sitio',
+      'tipo de radiobase',
+      'región',
+      'central',
+      'dirección',
+      'fecha',
+      'ingeniero',
+      'número de tarea',
+    ]);
+    expect(visit.responses).toHaveProperty('PRESENTACION:general:5');
+    expect(Object.keys(visit.responses)).toHaveLength(341);
+    expect(presentationFields(activeCatalog.fields).filter(field =>
+      ['región', 'central', 'dirección'].includes(field.label),
+    )).toHaveLength(3);
   });
 });

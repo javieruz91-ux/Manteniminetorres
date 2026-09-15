@@ -38,7 +38,12 @@ const importedFields: TemplateField[] = [
 ];
 
 function template() {
-  return { id: 'template-1', version: '3', hash: 'sha256-template-1' };
+  return {
+    id: 'template-1',
+    version: '3',
+    hash: 'sha256-template-1',
+    schemaVersion: 2,
+  };
 }
 
 function draft(): Visit {
@@ -215,7 +220,7 @@ describe('dynamic template maintenance rules', () => {
   it('blocks export without a pinned ready template or with unresolved audit cells', () => {
     const descriptor = (overrides: Partial<TemplateDescriptor> = {}): TemplateDescriptor => ({
       id: 'template-1', version: '3', hash: 'hash', fileName: 'original.xlsx', uploadedAt: now(),
-      ready: true, sheets: 1, sections: 1, fields: 1, unmappedCells: [], ...overrides,
+      schemaVersion: 2, ready: true, sheets: 1, sections: 1, fields: 1, unmappedCells: [], ...overrides,
     });
     expect(getTemplateExportBlockReason({}, descriptor())).toBe('Falta cargar la plantilla Excel original');
     expect(getTemplateExportBlockReason({ template: template() }, descriptor({ ready: false }))).toContain('sin mapear');

@@ -22,6 +22,7 @@ import {
   sha256,
   verifyTemplate,
   resolveLocalSeparators,
+  CATALOG_SCHEMA_VERSION,
   type TemplateCatalog,
   type TemplateField,
 } from "../lib/xlsxTemplate";
@@ -43,9 +44,14 @@ function authenticated(req: Request, res: Response): req is Request & {
 
 function descriptor(row: typeof excelTemplatesTable.$inferSelect | undefined) {
   if (!row) return null;
+  const schemaAudit = Array.isArray(row.audit)
+    ? row.audit.find((event): event is Record<string, unknown> =>
+      event && typeof event === "object" && event.type === "catalog-schema")
+    : undefined;
   return {
     ready: row.ready,
     version: row.version,
+    schemaVersion: Number(schemaAudit?.version ?? 1),
     fileName: row.fileName,
     sha256: row.sha256,
     catalog: row.catalog,
@@ -62,6 +68,7 @@ function localDescriptor(
   return {
     ready: parsed.ready,
     version: "1",
+    schemaVersion: parsed.schemaVersion ?? CATALOG_SCHEMA_VERSION,
     fileName,
     sha256: sha256(bytes),
     catalog: parsed.catalog,

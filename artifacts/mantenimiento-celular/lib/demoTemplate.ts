@@ -65,6 +65,7 @@ export function createDemoCatalog(): TemplateCatalog {
     descriptor: {
       id: 'demo-local-template',
       version: 'demo',
+      schemaVersion: 2,
       hash: 'demo-local',
       fileName: 'datos_de_ejemplo.xlsx',
       uploadedAt: new Date().toISOString(),

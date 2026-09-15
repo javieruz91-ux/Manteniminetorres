@@ -776,10 +776,11 @@ components:
         ignoreReason: { type: ["string", "null"] }
     TemplateDescriptor:
       type: object
-      required: [ready, version, fileName, sha256, catalog, unmapped, audit]
+      required: [ready, version, schemaVersion, fileName, sha256, catalog, unmapped, audit]
       properties:
         ready: { type: boolean }
         version: { type: integer, minimum: 0 }
+        schemaVersion: { type: integer, minimum: 1 }
         fileName: { type: ["string", "null"] }
         sha256: { type: ["string", "null"] }
         catalog:
