@@ -15,6 +15,12 @@ Exports must patch a clone of the original OOXML package, preserve unrelated par
 
 **How to apply:** Treat compatibility with the official binary as unverified until that exact file is imported and opened in target spreadsheet engines. Synthetic fixtures validate mechanics, not real-template fidelity.
 
+The official output sheets are excluded from the questionnaire catalog but are still operational export targets: findings use HOJA DE SEG columns B:G from row 7, and photographs use the 16 fixed REPORTE FOTOGRAFICO blocks.
+
+**Why:** Those sheets are report layouts rather than editable questions; parsing them as questionnaire fields creates false inputs, while omitting them from export loses the required evidence report.
+
+**How to apply:** Keep their coordinates explicit in the exporter and verify the original workbook after writing, including the added drawing relationships and unchanged styles, merges, formulas, and validations.
+
 Questionnaires must be derived structurally by maintenance row: one question owns its status and observation destinations, while auxiliary values remain child fields. Do not infer questions from unlocked styles or neighboring labels.
 
 **Why:** The official workbook uses styles, merged layout cells, formulas, and repeated headers for presentation; cell-level heuristics turned titles, output sheets, and duplicate auxiliary cells into questions.

@@ -223,5 +223,85 @@ try {
   if (error?.status !== 127) throw error;
 }
 
+// End-to-end local-first export: no login/session is involved. The snapshot
+// contains one real questionnaire point in NOK state, a stable finding ID,
+// description and one photo. The result is then reopened from disk.
+const question = officialCatalog.questions[0];
+const findingSnapshot = {
+  responses: { [question.field.id]: "NOK" },
+  sections: [{
+    id: "section-under-test",
+    name: question.sheet,
+    title: question.section,
+    points: [{ id: question.id, title: question.label, status: "NOK" }],
+  }],
+  findings: [{
+    id: `finding:${question.id}`,
+    pointId: question.id,
+    sectionId: "section-under-test",
+    description: "Aislador deteriorado",
+    responsible: "Mantenimiento",
+    priority: "ALTA",
+    startDate: "2026-09-15",
+    commitmentDate: "2026-09-20",
+    completedDate: null,
+    state: "ABIERTO",
+    photos: [{ id: "photo-integral", type: "ANTES" }],
+  }],
+};
+const generalField = officialCatalog.catalog.find((field) => field.sheet === "PRESENTACION");
+const integralCatalog = [generalField, question.field].filter(Boolean).map((field) => ({
+  ...field,
+  state: "mapped",
+}));
+const integralPatched = patchTemplate(officialFixture, findingSnapshot, integralCatalog);
+assert.ok(integralPatched.writtenTargets.includes("HOJA DE SEG!B7"));
+assert.ok(integralPatched.writtenTargets.includes("HOJA DE SEG!E7"));
+assert.ok(integralPatched.writtenTargets.includes("REPORTE FOTOGRAFICO!A30"));
+const validPng = Buffer.from(
+  "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489" +
+  "0000000d49444154789c6360f8cf00000004000101c9f3e5" +
+  "0000000049454e44ae426082",
+  "hex",
+);
+const integralEmbedded = embedEvidence(
+  integralPatched.bytes,
+  [{ id: "photo-integral", bytes: validPng, contentType: "image/png" }],
+  integralCatalog,
+);
+assert.equal(integralEmbedded.valid, true);
+assert.deepEqual(integralEmbedded.consumedPhotoIds, ["photo-integral"]);
+const integralVerification = verifyTemplate(
+  integralEmbedded.bytes,
+  integralCatalog,
+  integralPatched.writtenTargets,
+  integralPatched.capturedValues,
+);
+assert.equal(integralVerification.valid, true);
+const integralZip = join(dir, "integral-nok.xlsx");
+writeFileSync(integralZip, integralEmbedded.bytes);
+const originalZip = join(dir, "original-official.xlsx");
+writeFileSync(originalZip, officialFixture);
+const sheetNames = execFileSync("unzip", ["-p", integralZip, "xl/workbook.xml"], { encoding: "utf8" });
+for (const [name] of EXPECTED_SHEETS) assert.ok(sheetNames.includes(`name="${name}"`));
+const segXml = execFileSync("unzip", ["-p", integralZip, "xl/worksheets/sheet8.xml"], { encoding: "utf8" });
+const reportXml = execFileSync("unzip", ["-p", integralZip, "xl/worksheets/sheet9.xml"], { encoding: "utf8" });
+assert.ok(segXml.includes("Aislador deteriorado"));
+assert.ok(reportXml.includes("Aislador deteriorado"));
+assert.ok(execFileSync("unzip", ["-l", integralZip], { encoding: "utf8" }).includes("xl/media/template-"));
+assert.equal(
+  execFileSync("unzip", ["-p", originalZip, "xl/styles.xml"], { encoding: "utf8" }),
+  execFileSync("unzip", ["-p", integralZip, "xl/styles.xml"], { encoding: "utf8" }),
+);
+assert.ok(reportXml.includes('ref="A10:F27"'));
+assert.ok(reportXml.includes("<mergeCell"));
+assert.ok(execFileSync("unzip", ["-p", integralZip, "xl/worksheets/sheet1.xml"], { encoding: "utf8" }).includes("dataValidation"));
+try {
+  execFileSync("soffice", ["--headless", "--convert-to", "pdf", "--outdir", dir, integralZip], { stdio: "ignore" });
+  assert.ok(true, "LibreOffice reopened the generated XLSX");
+} catch (error) {
+  if (error?.status !== 127) throw error;
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log("xlsxTemplate parser/patch tests passed");

@@ -13,7 +13,7 @@ import * as Crypto from 'expo-crypto';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function FindingModalScreen() {
-  const { id, pointId, sectionId } = useLocalSearchParams<{ id: string, pointId: string, sectionId: string }>();
+  const { id, pointId, sectionId, status: requestedStatus } = useLocalSearchParams<{ id: string, pointId: string, sectionId: string, status?: string }>();
   const { getVisit, saveFindingAndStatus, savePhoto } = useVisits();
   const colors = useColors();
   const router = useRouter();
@@ -23,6 +23,8 @@ export default function FindingModalScreen() {
   const isReadOnly = visit?.lifecycleStatus === 'CERRADA';
   
   const existingFinding = visit?.findings.find(f => f.pointId === pointId);
+  const pointStatus = visit?.sections.flatMap(section => section.points).find(point => point.id === pointId)?.status;
+  const findingStatus = requestedStatus === 'SC' || pointStatus === 'SC' ? 'SC' : 'NOK';
 
   const [description, setDescription] = useState(existingFinding?.description || '');
   const [responsible, setResponsible] = useState(existingFinding?.responsible || '');
@@ -40,18 +42,18 @@ export default function FindingModalScreen() {
   const handleSave = async () => {
     if (isReadOnly) return;
     
-    if (!description || !responsible || !commitmentDate) {
-      Alert.alert('Datos Incompletos', 'Por favor completa todos los campos de texto.');
+    if (!description.trim() || !responsible.trim() || !commitmentDate) {
+      Alert.alert('Datos incompletos', 'Completa la descripción, responsable y fecha compromiso.');
       return;
     }
 
-    if (!isValidDate(commitmentDate)) {
+    if (commitmentDate && !isValidDate(commitmentDate)) {
       Alert.alert('Formato Inválido', 'La fecha debe tener formato YYYY-MM-DD');
       return;
     }
 
-    if (photos.filter(p => p.type === 'ANTES').length === 0) {
-      Alert.alert('Evidencia Requerida', 'Debes incluir al menos una foto del estado ANTES.');
+    if (photos.length === 0) {
+      Alert.alert('Evidencia Requerida', 'Debes incluir al menos una fotografía.');
       return;
     }
 
@@ -76,7 +78,7 @@ export default function FindingModalScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
       if (existingFinding) {
-        await saveFindingAndStatus(id, pointId, sectionId, "NOK", {
+        await saveFindingAndStatus(id, pointId, sectionId, findingStatus, {
           ...existingFinding,
           description,
           responsible,
@@ -87,8 +89,8 @@ export default function FindingModalScreen() {
           photos: updatedPhotos
         });
       } else {
-        await saveFindingAndStatus(id, pointId, sectionId, "NOK", {
-          id: Crypto.randomUUID(),
+        await saveFindingAndStatus(id, pointId, sectionId, findingStatus, {
+          id: `finding:${pointId}`,
           pointId,
           sectionId,
           description,

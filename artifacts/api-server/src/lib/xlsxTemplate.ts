@@ -20,6 +20,16 @@ export const EXPECTED_SHEETS = [
 export const PHOTO_SLOT_COUNT = 16;
 export const CATALOG_SCHEMA_VERSION = 2;
 const PHOTO_SLOT_START_ROW = 3;
+const OFFICIAL_PHOTO_SLOT_REFS = [
+  "REPORTE FOTOGRAFICO!A10:F27", "REPORTE FOTOGRAFICO!H10:M27",
+  "REPORTE FOTOGRAFICO!A34:F50", "REPORTE FOTOGRAFICO!H34:M50",
+  "REPORTE FOTOGRAFICO!A62:F78", "REPORTE FOTOGRAFICO!H62:M78",
+  "REPORTE FOTOGRAFICO!A86:F102", "REPORTE FOTOGRAFICO!H86:M102",
+  "REPORTE FOTOGRAFICO!A114:F130", "REPORTE FOTOGRAFICO!H114:M130",
+  "REPORTE FOTOGRAFICO!A138:F154", "REPORTE FOTOGRAFICO!H138:M154",
+  "REPORTE FOTOGRAFICO!A166:F182", "REPORTE FOTOGRAFICO!H166:M182",
+  "REPORTE FOTOGRAFICO!A190:F206", "REPORTE FOTOGRAFICO!H190:M206",
+] as const;
 
 export type ResponseType =
   | "text" | "number" | "date" | "selection" | "measurement" | "observation" | "status";
@@ -376,9 +386,28 @@ export function embedEvidence(
 ): { bytes: Buffer; consumedPhotoIds: string[]; details: string[]; valid: boolean } {
   const parsed = zipEntries(bytes);
   const sheets = workbookSheets(parsed.entries);
-  const photoFields = catalog
+  const mappedPhotoFields = catalog
     .filter((field) => field.state === "mapped" && field.sheet === "REPORTE FOTOGRAFICO" && field.evidenceSlot === "photo")
     .sort((a, b) => a.target.localeCompare(b.target));
+  const photoFields: TemplateField[] = mappedPhotoFields.length > 0
+    ? mappedPhotoFields
+    : OFFICIAL_PHOTO_SLOT_REFS.map((target, index) => ({
+      id: `REPORTE FOTOGRAFICO:photo:${index + 1}`,
+      sheet: "REPORTE FOTOGRAFICO",
+      subsection: `espacio ${index + 1}`,
+      key: target,
+      label: `Fotografía ${index + 1}`,
+      responseType: "observation",
+      options: [],
+      required: false,
+      applicability: "evidence.photo",
+      evidenceSlot: "photo",
+      target,
+      sourceEvidence: "Destino fotográfico oficial de la plantilla",
+      confidence: 1,
+      state: "mapped",
+      ignoreReason: null,
+    }));
   if (photos.length === 0) return { bytes, consumedPhotoIds: [], details: [], valid: true };
   if (photoFields.length === 0) {
     return { bytes, consumedPhotoIds: [], details: ["No hay slots REPORTE FOTOGRAFICO mapeados para fotografías"], valid: false };
@@ -1149,37 +1178,105 @@ function findValue(snapshot: unknown, field: TemplateField): unknown {
   return undefined;
 }
 
+function snapshotFindings(snapshot: unknown): Array<Record<string, unknown>> {
+  if (!snapshot || typeof snapshot !== "object") return [];
+  const record = snapshot as Record<string, unknown>;
+  const direct = Array.isArray(record.findings) ? record.findings : [];
+  const nested = Array.isArray(record.sections)
+    ? record.sections.flatMap((section) =>
+      section && typeof section === "object" && Array.isArray((section as Record<string, unknown>).points)
+        ? ((section as Record<string, unknown>).points as unknown[]).flatMap((point) =>
+          point && typeof point === "object" && Array.isArray((point as Record<string, unknown>).findings)
+            ? (point as Record<string, unknown>).findings as unknown[] : [])
+        : [])
+    : [];
+  return [...direct, ...nested].filter(
+    (finding): finding is Record<string, unknown> => Boolean(finding && typeof finding === "object"),
+  );
+}
+
+function findingContext(snapshot: unknown, finding: Record<string, unknown>): {
+  sheet: string;
+  point: string;
+} {
+  if (!snapshot || typeof snapshot !== "object") return { sheet: "", point: String(finding.pointId ?? "") };
+  const sections = Array.isArray((snapshot as Record<string, unknown>).sections)
+    ? (snapshot as Record<string, unknown>).sections as unknown[] : [];
+  for (const section of sections) {
+    if (!section || typeof section !== "object") continue;
+    const sectionRecord = section as Record<string, unknown>;
+    const points = Array.isArray(sectionRecord.points) ? sectionRecord.points : [];
+    if (String(sectionRecord.id ?? "") !== String(finding.sectionId ?? "")) continue;
+    const point = points.find((candidate) =>
+      candidate && typeof candidate === "object" &&
+      String((candidate as Record<string, unknown>).id ?? "") === String(finding.pointId ?? ""),
+    );
+    return {
+      sheet: String(sectionRecord.name ?? sectionRecord.title ?? ""),
+      point: point && typeof point === "object"
+        ? String((point as Record<string, unknown>).title ?? finding.pointId ?? "")
+        : String(finding.pointId ?? ""),
+    };
+  }
+  return { sheet: "", point: String(finding.pointId ?? "") };
+}
+
 export function patchTemplate(bytes: Buffer, snapshot: unknown, catalog: TemplateField[]): {
   bytes: Buffer; writtenTargets: string[]; capturedValues: Record<string, string>;
 } {
   const parsed = zipEntries(bytes);
   const writtenTargets: string[] = [];
   const capturedValues: Record<string, string> = {};
+  const writeTarget = (target: string, value: unknown): void => {
+    const [sheet, rawRef] = target.split("!");
+    const ref = topLeftRef(rawRef);
+    const sheetPath = workbookSheets(parsed.entries).find((s) => s.name === sheet)?.path;
+    const entry = parsed.entries.find((e) => e.name === sheetPath);
+    if (!entry) throw new Error(`No se encontró ${target}`);
+    const before = xmlData(entry);
+    const patched = replaceCellValue(before, ref, value);
+    if (patched === before) throw new Error(`No se pudo escribir ${target}`);
+    updateEntryData(entry, Buffer.from(patched));
+    writtenTargets.push(target);
+    capturedValues[target] = String(value ?? "");
+  };
   for (const field of catalog.filter((f) => f.state === "mapped" && f.evidenceSlot !== "photo" && !f.target.endsWith("!__evidence__"))) {
     const value = findValue(snapshot, field);
     if (value === undefined || value === null || value === "") continue;
     const writeValue = (field.responseType === "number" || field.responseType === "measurement") &&
       typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))
       ? Number(value) : value;
-    capturedValues[field.target] = String(writeValue ?? "");
-    const [sheet, rawRef] = field.target.split("!");
-    const ref = topLeftRef(rawRef);
-    const sheetPath = workbookSheets(parsed.entries).find((s) => s.name === sheet)?.path;
-    const entry = parsed.entries.find((e) => e.name === sheetPath);
-    if (!entry) throw new Error(`No se encontró ${field.target}`);
-    const patched = replaceCellValue(xmlData(entry), ref, writeValue);
-    if (patched === xmlData(entry)) throw new Error(`No se pudo escribir ${field.target}`);
-    entry.data = Buffer.from(patched);
-    const compressed = entry.method === 8 ? deflateRawSync(entry.data) : entry.data;
-    const localNameLen = entry.local.readUInt16LE(26); const extraLen = entry.local.readUInt16LE(28);
-    const localHead = Buffer.from(entry.local.subarray(0, 30 + localNameLen + extraLen));
-    const checksum = crc32(entry.data);
-    localHead.writeUInt32LE(checksum, 14); localHead.writeUInt32LE(compressed.length, 18); localHead.writeUInt32LE(entry.data.length, 22);
-    entry.local = Buffer.concat([localHead, compressed]);
-    entry.compressed = Buffer.from(compressed);
-    entry.central.writeUInt32LE(checksum, 16); entry.central.writeUInt32LE(compressed.length, 20); entry.central.writeUInt32LE(entry.data.length, 24);
-    writtenTargets.push(field.target);
+    writeTarget(field.target, writeValue);
   }
+
+  // These two output sheets are fixed parts of the owner workbook and are
+  // intentionally excluded from the questionnaire catalog. They are filled
+  // from the same stable finding identity used by the mobile draft.
+  const findings = snapshotFindings(snapshot);
+  findings.slice(0, 36).forEach((finding, index) => {
+    const context = findingContext(snapshot, finding);
+    const row = index + 7;
+    writeTarget(`HOJA DE SEG!B${row}`, context.sheet);
+    writeTarget(`HOJA DE SEG!C${row}`, context.point);
+    writeTarget(`HOJA DE SEG!D${row}`, finding.responsible ?? "");
+    writeTarget(`HOJA DE SEG!E${row}`, finding.description ?? "");
+    writeTarget(`HOJA DE SEG!F${row}`, finding.startDate ?? "");
+    writeTarget(`HOJA DE SEG!G${row}`, finding.completedDate ?? "");
+  });
+
+  const reportObservationRefs = [
+    "A30", "H30", "A53", "H53", "A80", "H80", "A105", "H105",
+    "A132", "H132", "A157", "H157", "A184", "H184", "A209", "H209",
+  ];
+  const reportPhotos = findings.flatMap((finding) => {
+    const context = findingContext(snapshot, finding);
+    return (Array.isArray(finding.photos) ? finding.photos : []).map(() =>
+      `${context.sheet} · ${context.point}: ${String(finding.description ?? "")}`,
+    );
+  });
+  reportPhotos.slice(0, reportObservationRefs.length).forEach((description, index) => {
+    writeTarget(`REPORTE FOTOGRAFICO!${reportObservationRefs[index]}`, description);
+  });
   return { bytes: zipXml(parsed.entries, parsed.comment), writtenTargets, capturedValues };
 }
 

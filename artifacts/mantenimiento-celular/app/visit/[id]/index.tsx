@@ -364,10 +364,14 @@ export default function VisitDetailScreen() {
               readOnly={isReadOnly}
               colors={colors}
               onStatus={status => void chooseStatus(question, status)}
-               onFinding={() => router.push({
-                 pathname: `/visit/${visit.id}/finding/${question.field.id}` as any,
-                 params: { sectionId: ownerSectionId(visit, question.field.id), status },
-               })}
+               onFinding={() => {
+                 const owner = sectionForQuestion(question.field.id);
+                 if (!owner) return;
+                 router.push({
+                   pathname: `/visit/${visit.id}/finding/${question.field.id}` as any,
+                   params: { sectionId: owner.id, status: statusFor(question.field.id) },
+                 });
+               }}
               onValue={(fieldId, value) => {
                 if (!isReadOnly) void updateResponse(visit.id, fieldId, value);
               }}
@@ -428,6 +432,7 @@ function CaptureCard({
   readOnly,
   colors,
   onStatus,
+  onFinding,
   onValue,
 }: {
   question: CaptureQuestion;
@@ -604,6 +609,7 @@ const styles = StyleSheet.create({
   additionalChoice: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10 },
   observation: { minHeight: 72, textAlignVertical: 'top', paddingTop: 12 },
   findingHint: { fontSize: 13, lineHeight: 18 },
+  findingBox: { gap: 8, marginTop: 2 },
   navigationRow: { flexDirection: 'row', gap: 10 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 });

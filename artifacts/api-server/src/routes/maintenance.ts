@@ -303,12 +303,21 @@ function validateSnapshot(snapshot: {
           );
         }
       }
-      if (requireCompletion && point.status === "NOK" && pointFindings.length !== 1) {
+       if (
+         requireCompletion &&
+         (point.status === "NOK" || point.status === "SC") &&
+         pointFindings.length !== 1
+       ) {
         throw new InvalidSnapshotError(
           `Point ${point.id} must have exactly one finding`,
         );
       }
-      if (requireCompletion && point.status !== "NOK" && pointFindings.length > 0) {
+       if (
+         requireCompletion &&
+         point.status !== "NOK" &&
+         point.status !== "SC" &&
+         pointFindings.length > 0
+       ) {
         throw new InvalidSnapshotError(
           `Point ${point.id} cannot have a finding unless it is NOK`,
         );
@@ -360,13 +369,12 @@ function validateSnapshot(snapshot: {
       if (
         !findingPhotos.some(
           (photo) =>
-            photo.type === "ANTES" &&
-            photo.uploadStatus === "uploaded" &&
-            photo.objectPath,
+           photo.uploadStatus === "uploaded" &&
+           photo.objectPath,
         )
       ) {
         throw new InvalidSnapshotError(
-          `Finding ${finding.id} requires an ANTES photo`,
+          `Finding ${finding.id} requires at least one photo`,
         );
       }
       if (finding.state === "CORREGIDO") {

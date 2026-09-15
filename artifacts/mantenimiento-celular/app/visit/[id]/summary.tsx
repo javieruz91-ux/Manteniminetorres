@@ -65,12 +65,17 @@ export default function SummaryScreen() {
   const statusById = new Map(
     visit.sections.flatMap(section => section.points.map(point => [point.id, point.status] as const)),
   );
-  const reviewItems = realQuestions.map(question => ({
-    id: question.field.id,
-    section: `${question.field.sheet} · ${question.field.section || question.field.sheet}`,
-    title: question.field.label,
-    status: statusById.get(question.field.id) ?? 'PENDING',
-  }));
+  const reviewItems = visit.findings.map(finding => {
+    const question = realQuestions.find(candidate => candidate.field.id === finding.pointId);
+    return {
+      id: finding.id,
+      section: question ? `${question.field.sheet} · ${question.field.section || question.field.sheet}` : finding.sectionId,
+      title: question?.field.label ?? finding.pointId,
+      status: statusById.get(finding.pointId) ?? 'PENDING',
+      description: finding.description,
+      photos: finding.photos.length,
+    };
+  });
 
   const createAuditEvent = (action: string, reason: string): AuditEvent => {
     return {
@@ -271,7 +276,7 @@ export default function SummaryScreen() {
           
           <ValidationItem ok={isGeneralDataComplete} text="Datos generales completos" />
           <ValidationItem ok={allPointsEvaluated} text="Todos los puntos de checklist evaluados" />
-          <ValidationItem ok={allNokHaveFindings} text="Requisitos completos en hallazgos (NOK)" />
+          <ValidationItem ok={allNokHaveFindings} text="Requisitos completos en hallazgos (NOK/SC)" />
         </Card>
 
         <Card style={styles.card}>
@@ -304,9 +309,10 @@ export default function SummaryScreen() {
                   <Text style={{ color: colors.foreground, fontFamily: 'Inter_600SemiBold' }}>{item.title}</Text>
                   <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>{item.section}</Text>
                 </View>
-                <Text style={[styles.reviewStatus, { color: item.status === 'NOK' ? colors.destructive : colors.warning }]}>
-                  {item.status === 'NOK' ? 'NOK' : 'PENDIENTE'}
+                  <Text style={[styles.reviewStatus, { color: item.status === 'NOK' ? colors.destructive : colors.warning }]}>
+                   {item.status === 'NOK' ? 'NOK' : 'SC'}
                 </Text>
+                  <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>{item.photos} foto(s)</Text>
               </View>
             ))
           )}

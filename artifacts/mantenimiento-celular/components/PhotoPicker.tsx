@@ -18,15 +18,28 @@ interface PhotoPickerProps {
 export function PhotoPicker({ photos, onAdd, onRemove, type, label, disabled = false }: PhotoPickerProps) {
   const colors = useColors();
 
-  const handlePick = async () => {
+  const handlePick = async (source: 'camera' | 'library') => {
     if (disabled) return;
-    let result: ImagePicker.ImagePickerResult;
-    if (Platform.OS === 'web') {
+    let result: ImagePicker.ImagePickerResult | null = null;
+    if (source === 'library') {
       result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.7,
         allowsMultipleSelection: false,
       });
+    } else if (Platform.OS === 'web') {
+      try {
+        result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          quality: 0.7,
+        });
+      } catch {
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          quality: 0.7,
+          allowsMultipleSelection: false,
+        });
+      }
     } else {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
@@ -39,7 +52,7 @@ export function PhotoPicker({ photos, onAdd, onRemove, type, label, disabled = f
       });
     }
 
-    if (!result.canceled && result.assets[0]) {
+    if (result && !result.canceled && result.assets[0]) {
       onAdd({
         id: Crypto.randomUUID(),
         uri: result.assets[0].uri,
@@ -76,13 +89,24 @@ export function PhotoPicker({ photos, onAdd, onRemove, type, label, disabled = f
           </View>
         ))}
         {!disabled && (
-          <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: colors.muted, borderColor: colors.border }]}
-            onPress={handlePick}
-          >
-            <Feather name="camera" size={24} color={colors.mutedForeground} />
-            <Text style={[styles.addText, { color: colors.mutedForeground }]}>Añadir</Text>
-          </TouchableOpacity>
+          <View style={styles.addActions}>
+            <TouchableOpacity
+              testID={`photo-library-${type}`}
+              style={[styles.addBtn, { backgroundColor: colors.muted, borderColor: colors.border }]}
+              onPress={() => void handlePick('library')}
+            >
+              <Feather name="image" size={22} color={colors.mutedForeground} />
+              <Text style={[styles.addText, { color: colors.mutedForeground }]}>Archivo</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID={`photo-camera-${type}`}
+              style={[styles.addBtn, { backgroundColor: colors.muted, borderColor: colors.border }]}
+              onPress={() => void handlePick('camera')}
+            >
+              <Feather name="camera" size={22} color={colors.mutedForeground} />
+              <Text style={[styles.addText, { color: colors.mutedForeground }]}>Cámara</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </ScrollView>
     </View>
@@ -129,6 +153,10 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  addActions: {
+    flexDirection: 'row',
+    gap: 8,
   },
   addText: {
     fontSize: 12,

@@ -428,9 +428,9 @@ export function getCloseEligibility(visit: Visit, templateFields: TemplateField[
         missingItems.push(`Falta hallazgo para punto NOK: ${section.title} - ${point.title}`);
         continue;
       }
-      if (!finding.description?.trim()) {
+      if (!finding.description?.trim() || !finding.responsible?.trim() || !isoDate.test(finding.commitmentDate)) {
         allNokHaveFindings = false;
-        missingItems.push(`Falta descripción del hallazgo: ${section.title} - ${point.title}`);
+        missingItems.push(`Datos de hallazgo incompletos en: ${section.title} - ${point.title}`);
       }
       if (!finding.photos.length) {
         allNokHaveFindings = false;

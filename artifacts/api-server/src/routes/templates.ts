@@ -16,6 +16,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import {
   convertXlsxToPdf,
   embedEvidence,
+  PHOTO_SLOT_COUNT,
   parseTemplate,
   prepareBlankTemplate,
   patchTemplate,
@@ -182,11 +183,7 @@ router.post("/templates/export-local", async (req, res) => {
       exportCatalog,
       patched.writtenTargets,
       patched.capturedValues,
-      Math.max(1, Math.ceil(evidencePhotos.length / Math.max(1,
-        exportCatalog.filter((field: TemplateField) =>
-          field.state === "mapped" &&
-          field.sheet === "REPORTE FOTOGRAFICO" &&
-          field.evidenceSlot === "photo").length))),
+       Math.max(1, Math.ceil(evidencePhotos.length / PHOTO_SLOT_COUNT)),
     );
     if (!verification.valid) {
       res.status(400).json({ error: "Exportación bloqueada: " + verification.details.join("; "), verification });
@@ -394,9 +391,7 @@ router.post("/templates/export", async (req, res) => {
       exportCatalog,
       patched.writtenTargets,
       patched.capturedValues,
-      Math.max(1, Math.ceil(evidencePhotos.length / Math.max(1,
-        exportCatalog.filter((field) => field.state === "mapped" &&
-          field.sheet === "REPORTE FOTOGRAFICO" && field.evidenceSlot === "photo").length))),
+       Math.max(1, Math.ceil(evidencePhotos.length / PHOTO_SLOT_COUNT)),
     );
     if (!verification.valid) {
       res.status(400).json({ error: "Exportación bloqueada: " + verification.details.join("; "), verification });

@@ -74,7 +74,7 @@ function finding(visit: Visit): Finding {
   };
 }
 
-function allStatusPoints(visit: Visit, status: 'OK' | 'NOK' = 'OK'): Visit {
+function allStatusPoints(visit: Visit, status: 'OK' | 'NOK' | 'SC' = 'OK'): Visit {
   return {
     ...visit,
     sections: visit.sections.map(section => ({
@@ -201,6 +201,31 @@ describe('dynamic template maintenance rules', () => {
     expect(visit.findings).toHaveLength(0);
     const closed = closeVisit(allStatusPoints(draft()), { id: 'close', eventType: 'CLOSE_VISIT', occurredAt: now() }, { id: ids, now }, importedFields);
     expect(closed.lifecycleStatus).toBe('CERRADA');
+  });
+
+  it('keeps one stable finding for NOK and SC and removes it on OK/NA', () => {
+    const scDraft = allStatusPoints(draft(), 'SC');
+    const first = saveFindingAndStatus(
+      scDraft,
+      scDraft.sections[0].id,
+      'status-1',
+      'SC',
+      { ...finding(scDraft), id: 'temporary-id' },
+      { id: ids, now },
+    );
+    expect(first.findings).toHaveLength(1);
+    expect(first.findings[0].id).toBe('finding:status-1');
+    const replaced = saveFindingAndStatus(
+      first,
+      first.sections[0].id,
+      'status-1',
+      'SC',
+      { ...finding(first), id: 'another-temporary-id', description: 'Actualizado' },
+      { id: ids, now },
+    );
+    expect(replaced.findings).toHaveLength(1);
+    expect(replaced.findings[0].description).toBe('Actualizado');
+    expect(setPointStatus(replaced, replaced.sections[0].id, 'status-1', 'NA', { id: ids, now }).findings).toHaveLength(0);
   });
 
   it('migrates a partial legacy visit without losing responses', () => {

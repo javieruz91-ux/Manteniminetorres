@@ -27,12 +27,12 @@ export default function SectionDetailScreen() {
     if (isReadOnly) return;
     Haptics.selectionAsync();
     
-    if (status === 'NOK') {
+    if (status === 'NOK' || status === 'SC') {
       // Don't update point status yet to avoid orphan NOK records.
       // Instead, navigate to finding creation. Status is updated there.
       router.push({
         pathname: `/visit/${visit.id}/finding/${pointId}` as any,
-        params: { sectionId: section.id }
+        params: { sectionId: section.id, status }
       });
     } else {
       // If changing from NOK to something else, prompt to delete finding
@@ -142,9 +142,9 @@ export default function SectionDetailScreen() {
                   />
                 </View>
 
-                {point.status === 'NOK' && !hasFinding && (
+                 {(point.status === 'NOK' || point.status === 'SC') && !hasFinding && (
                   <Text style={[styles.nokWarning, { color: colors.destructive }]}>
-                    Se requiere registrar un hallazgo para este punto.
+                     Se requiere registrar un hallazgo con descripción y fotografía.
                   </Text>
                 )}
                 {hasFinding && (
