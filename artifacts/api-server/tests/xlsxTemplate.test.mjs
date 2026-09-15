@@ -52,6 +52,45 @@ assert.ok(officialCatalog.catalog.some((field) => field.role === "additional"));
 assert.ok(officialCatalog.audit.some((event) => event.type === "presentation-summary" && event.expectedFields === 10));
 assert.ok(officialCatalog.audit.some((event) => event.type === "sheet-excluded" && event.sheet === "HOJA DE SEG"));
 
+// The Alarmas de Fuerza headers are reference text, not checklist questions.
+const forceAlarmQuestions = officialCatalog.questions.filter(
+  (question) => question.sheet === "(HW) ALARMAS DE FUERZA",
+);
+assert.equal(forceAlarmQuestions.some((question) => question.row === 8 || question.row === 75), false);
+assert.equal(
+  officialCatalog.catalog.some(
+    (field) => field.sheet === "(HW) ALARMAS DE FUERZA" &&
+      (field.target.endsWith("!D8") || field.target.endsWith("!D75")),
+  ),
+  false,
+);
+assert.equal(
+  forceAlarmQuestions.some((question) => /POSICI[ÓO]N|LEYENDA DE ALARMA|ALARMAS EXTERNAS ADICIONALES/i.test(question.label)),
+  false,
+);
+
+// Planta Huawei exposes only the nine real status rows. Relay mappings,
+// BATERY SUMARY, and alarm-reference tables are informational workbook text.
+const huaweiQuestions = officialCatalog.questions.filter(
+  (question) => question.sheet === "PLANTA HUAWEI",
+);
+assert.deepEqual(
+  huaweiQuestions.map((question) => question.row),
+  [8, 9, 10, 11, 12, 13, 14, 15, 18],
+);
+assert.equal(
+  officialCatalog.catalog.some(
+    (field) => field.sheet === "PLANTA HUAWEI" &&
+      !["D8", "D9", "D10", "D11", "D12", "D13", "D14", "D15", "D18"]
+        .some((ref) => field.target.endsWith(`!${ref}`)),
+  ),
+  false,
+);
+assert.equal(
+  huaweiQuestions.some((question) => /BATERY|RELAY|RECTIFIER|ALARM SETTINGS|SUMMARY/i.test(question.label)),
+  false,
+);
+
 // Structural contract confirmed against the owner-provided workbook fixture.
 // Keep it explicit so a future change cannot silently alter sheet names/order.
 assert.deepEqual(EXPECTED_SHEETS, [

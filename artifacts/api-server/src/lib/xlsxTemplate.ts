@@ -675,6 +675,10 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
     "ELECTROMECANICA", "TIERRAS", "TRANSMISION",
   ]);
   const excludedSheets = new Set(["HOJA DE SEG", "REPORTE FOTOGRAFICO", "base"]);
+  // These are the only rows in PLANTA HUAWEI that have a real checklist
+  // status destination. The remaining rows are the owner's relay/alarm
+  // reference tables and must stay informational.
+  const huaweiStatusRows = new Set([8, 9, 10, 11, 12, 13, 14, 15, 18]);
   audit.push({ type: "catalog-schema", version: CATALOG_SCHEMA_VERSION });
 
   const readCells = (entry: ZipEntry): Map<string, CatalogCell> => {
@@ -822,9 +826,20 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
       }
       if (sheet.name === "(HW) ALARMAS DE FUERZA") {
         if (a && b && /^\d+$/.test(a)) section = b;
-        if (c && f && g && !catalogIsInstruction(g)) {
-          addQuestion(rowNumber, `${section} · ${c} · ${g}`, `${section}; posición ${c}; alarma ${f}; ${g}`, []);
+        // Row 8 is the table header ("POSICION / LEYENDA DE ALARMA").
+        // Rows 69+ are the Ericsson reference table; it has a column named
+        // "ESTATUS" but no checklist rows. In particular, row 75 must never
+        // become a question just because it contains "Posición".
+        const isHuaweiAlarmRow = rowNumber >= 10 && rowNumber <= 66;
+        if (isHuaweiAlarmRow && c && f && g && !catalogIsInstruction(g)) {
+          // The section heading is already rendered by the section selector.
+          // Keeping it out of the label prevents "ALARMAS EXTERNAS
+          // ADICIONALES" from being shown as a question.
+          addQuestion(rowNumber, `${c} · ${g}`, `${section}; posición ${c}; alarma ${f}; ${g}`, []);
         }
+        continue;
+      }
+      if (sheet.name === "PLANTA HUAWEI" && !huaweiStatusRows.has(rowNumber)) {
         continue;
       }
       let label = "";
