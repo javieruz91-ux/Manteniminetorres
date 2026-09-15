@@ -1025,6 +1025,85 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
         columns: ericssonColumns,
       });
     }
+    if (sheet.name === "ELECTROMECANICA") {
+      const addElectromechanicalField = (
+        target: string,
+        label: string,
+        responseType: ResponseType = "text",
+        options: string[] = [],
+      ) => addStandaloneField(
+        sheet.name,
+        target,
+        label,
+        responseType,
+        "Mediciones auxiliares",
+        options,
+      );
+      const electroFields: Array<[string, string, ResponseType?, string[]?]> = [
+        ["G9", "Capacidad de acometida eléctrica", "measurement"],
+        ["I9", "Tipo de acometida eléctrica", "selection", ["Termomagnético", "Cuchillas"]],
+        ["G10", "Voltaje fase 1-neutro", "measurement"],
+        ["J10", "Voltaje fase 2-neutro", "measurement"],
+        ["G11", "Voltaje fase 3-neutro", "measurement"],
+        ["G12", "Voltaje tierra-neutro", "measurement"],
+        ["G13", "Voltaje fase 1-2", "measurement"],
+        ["J13", "Voltaje fase 2-3", "measurement"],
+        ["G14", "Voltaje fase 3-1", "measurement"],
+        ["G15", "Calibre del cable de acometida CFE", "text"],
+        ["I15", "Aislamiento del cable de acometida CFE", "text"],
+        ["G16", "Calibre del cable de acometida al centro de carga", "text"],
+        ["I16", "Aislamiento del cable de acometida al centro de carga", "text"],
+        ["G17", "Capacidad del interruptor del centro de carga", "measurement"],
+        ["G18", "Color conductor acometida indoor · Fase A", "text"],
+        ["J18", "Color conductor acometida indoor · Fase B", "text"],
+        ["G19", "Color conductor acometida indoor · Fase C", "text"],
+        ["J19", "Color conductor acometida indoor · Neutro", "text"],
+        ["G20", "Color conductor acometida indoor · Fase C adicional", "text"],
+        ["G21", "Color conductor acometida outdoor · Fase A", "text"],
+        ["J21", "Color conductor acometida outdoor · Fase B", "text"],
+        ["G22", "Color conductor acometida outdoor · Neutro", "text"],
+        ["J22", "Color conductor acometida outdoor · Tierra física", "text"],
+        ["G37", "Cantidad de interruptores de alumbrado perimetral", "number"],
+        ["G38", "Cantidad de lámparas de sala o contenedor", "number"],
+        ["G39", "Tipo de luces dentro del contenedor", "text"],
+        ["G40", "Tipo de luces del alumbrado externo", "text"],
+        ["G44", "Capacidad del transformador", "measurement"],
+        ["J45", "Tipo de transformador", "selection", ["Poste", "Jardín", "Otro"]],
+        ["F51", "Marca de la planta de emergencia", "text"],
+        ["I51", "Capacidad de la planta de emergencia", "measurement"],
+        ["G52", "Voltaje con carga fase 1-2 de la planta de emergencia", "measurement"],
+        ["G53", "Voltaje con carga fase 2-3 de la planta de emergencia", "measurement"],
+        ["G54", "Voltaje con carga fase 3-1 de la planta de emergencia", "measurement"],
+        ["G56", "Nivel de combustible de la planta de emergencia", "measurement"],
+        ["G57", "Nivel de anticongelante de la planta de emergencia", "measurement"],
+        ["G58", "Nivel de agua de las baterías de la planta de emergencia", "measurement"],
+        ["G59", "Nivel de aceite de la planta de emergencia", "measurement"],
+        ["G63", "Tiempo de transferencia de la planta de emergencia", "measurement"],
+        ["G64", "Tiempo de retransferencia de la planta de emergencia", "measurement"],
+        ["G65", "Tiempo de paro de la planta de emergencia", "measurement"],
+        ["G66", "Contador de horas y fecha de la planta de emergencia", "text"],
+        ["G67", "Capacidad del tanque de combustible", "measurement"],
+        ["C70", "Marca del equipo de aire acondicionado", "text"],
+        ["C71", "Modelo del equipo de aire acondicionado", "text"],
+        ["G70", "Capacidad del equipo de aire acondicionado", "measurement"],
+        ["G71", "Alimentación del equipo de aire acondicionado", "text"],
+        ["G75", "Temperatura del contenedor", "measurement"],
+        ["G76", "Humedad relativa del contenedor", "measurement"],
+        ["G81", "Capacidad del interruptor de RBS Huawei", "measurement"],
+        ["F82", "Voltaje de alimentación AC del gabinete Huawei", "measurement"],
+        ["F83", "Voltaje de alimentación DC del Nodo B", "measurement"],
+        ["G87", "Capacidad del interruptor de gabinete Carrier o TX", "measurement"],
+        ["G129", "Voltaje de flotación de planta de gabinete CE o TX", "measurement"],
+      ];
+      for (const [target, label, responseType = "text", options = []] of electroFields) {
+        addElectromechanicalField(target, label, responseType, options);
+      }
+      audit.push({
+        type: "electromechanical-explicit-map",
+        auxiliaryFields: electroFields.map(([target, label]) => ({ target, label })),
+        stateQuestionRows: cells.size,
+      });
+    }
     if (sheet.name === "INFRAESTRUCTURA") {
       const section = "Conteo de antenas de torre";
       addInfrastructureField("D45", "Cantidad de tramos con los que está construida la torre", "selection", section,
@@ -1180,7 +1259,7 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
       else if (a && c && /^\d/.test(a) && !catalogIsInstruction(a)) label = `${a} · ${c}`;
       if (!label || catalogIsHeader(label) || catalogIsInstruction(label) || d) continue;
       if (catalogMergedSecondary(`B${rowNumber}`, merged)) continue;
-      const additionalLabels = sheet.name === "TRANSMISION"
+      const additionalLabels = sheet.name === "TRANSMISION" || sheet.name === "ELECTROMECANICA"
         ? []
         : [...rowCells.values()]
         .filter((cell) => cell.col > 2 && cell.value.trim() && !cell.formula &&
