@@ -35,6 +35,7 @@ export function questionObservationId(questionId: string): string {
 
 function isQuestionField(field: TemplateField): boolean {
   if (field.role === 'question') return true;
+  if (field.role === 'standalone') return true;
   return field.type === 'status' &&
     field.sheet !== PRESENTATION_SHEET &&
     field.role !== 'additional' &&
@@ -169,6 +170,9 @@ export function completedQuestionCount(
     visit.sections.flatMap(section => section.points.map(point => [point.id, point.status] as const)),
   );
   return questions.filter(question => {
+    if (question.field.role === 'standalone') {
+      return responseIsComplete(visit.responses[question.field.id]);
+    }
     const status = statuses.get(question.field.id) ?? visit.responses[question.field.id];
     return ['OK', 'NOK', 'SC', 'NA'].includes(String(status));
   }).length;

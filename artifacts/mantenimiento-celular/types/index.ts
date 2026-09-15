@@ -3,7 +3,7 @@ export type FindingPriority = 'BAJA' | 'MEDIA' | 'ALTA' | 'CRITICA';
 export type FindingState = 'ABIERTO' | 'CORREGIDO';
 export type VisitSnapshotLifecycleStatus = 'BORRADOR' | 'ABIERTA' | 'CERRADA' | 'REABIERTA';
 export type VisitSnapshotSyncStatus = 'PENDIENTE' | 'SINCRONIZANDO' | 'SINCRONIZADO' | 'ERROR';
-export const CURRENT_CATALOG_SCHEMA_VERSION = 2;
+export const CURRENT_CATALOG_SCHEMA_VERSION = 3;
 
 export type TemplateFieldType =
   | 'text'
@@ -38,7 +38,7 @@ export interface TemplateField {
   mapped?: boolean;
   /** UI classification; presentation cells remain in the catalog for export but are not questions. */
   logical?: boolean;
-  role?: 'presentation' | 'question' | 'additional';
+  role?: 'presentation' | 'question' | 'additional' | 'standalone';
   questionId?: string;
   questionLabel?: string;
   row?: number;

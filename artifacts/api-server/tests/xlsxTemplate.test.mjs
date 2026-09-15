@@ -91,6 +91,51 @@ assert.equal(
   false,
 );
 
+// INFRAESTRUCTURA keeps its original status rows and maps every editable
+// tower/radiation destination explicitly. The example text is informational.
+const infrastructureFields = officialCatalog.catalog.filter(
+  (field) => field.sheet === "INFRAESTRUCTURA",
+);
+const infrastructureQuestions = officialCatalog.questions.filter(
+  (question) => question.sheet === "INFRAESTRUCTURA",
+);
+assert.ok(infrastructureQuestions.some((question) => question.row === 39));
+assert.ok(infrastructureQuestions.some((question) => question.row === 43));
+assert.equal(infrastructureQuestions.some((question) => question.row >= 44), false);
+assert.equal(infrastructureFields.some((field) => /EJEMPLO DE TRAMOS/i.test(field.label)), false);
+assert.equal(infrastructureFields.some((field) => /EJEMPLO DE TRAMOS/i.test(field.sourceEvidence)), false);
+assert.equal(infrastructureFields.find((field) => field.target === "INFRAESTRUCTURA!D45")?.responseType, "selection");
+assert.equal(
+  infrastructureFields.filter((field) => /^INFRAESTRUCTURA![FGHI](4[89]|5[0-9])$/.test(field.target)).length,
+  48,
+);
+assert.ok(infrastructureFields.some((field) => field.target === "INFRAESTRUCTURA!B60" && field.evidenceSlot === "photo"));
+const infrastructureRadiation = [
+  { starts: [65, 75, 85], ret: true },
+  { starts: [99, 109, 119], ret: true },
+  { starts: [131, 141, 151], ret: true },
+  { starts: [163, 173, 183], ret: true },
+  { starts: [195, 204, 213], ret: false },
+  { starts: [224, 233, 242], ret: false },
+  { starts: [253, 262, 271], ret: false },
+];
+for (const block of infrastructureRadiation) {
+  for (const start of block.starts) {
+    for (let offset = 0; offset < 4; offset++) {
+      assert.ok(infrastructureFields.some((field) => field.target === `INFRAESTRUCTURA!H${start + offset}`));
+      assert.ok(infrastructureFields.some((field) => field.target === `INFRAESTRUCTURA!J${start + offset}`));
+    }
+    for (let offset = 4; offset < 8; offset++) {
+      assert.ok(infrastructureFields.some((field) => field.target === `INFRAESTRUCTURA!D${start + offset}`));
+    }
+    if (block.ret) {
+      assert.ok(infrastructureFields.some((field) => field.target === `INFRAESTRUCTURA!E${start + 8}:F${start + 8}`));
+      assert.ok(infrastructureFields.some((field) => field.target === `INFRAESTRUCTURA!H${start + 8}`));
+      assert.ok(infrastructureFields.some((field) => field.target === `INFRAESTRUCTURA!J${start + 8}`));
+    }
+  }
+}
+
 // Structural contract confirmed against the owner-provided workbook fixture.
 // Keep it explicit so a future change cannot silently alter sheet names/order.
 assert.deepEqual(EXPECTED_SHEETS, [
@@ -217,6 +262,51 @@ const rangePatch = patchTemplate(source, { Estado: "wrong", responses: { "range-
 assert.equal(verifyTemplate(rangePatch.bytes, [rangeField], rangePatch.writtenTargets, rangePatch.capturedValues).valid, true);
 assert.equal(verifyTemplate(rangePatch.bytes, [rangeField], [], { [rangeField.target]: "exact" }).valid, false);
 
+// Every INFRAESTRUCTURA destination must survive a complete local export.
+// Values are deliberately unique so a shifted row/column cannot pass.
+const mappedInfrastructureFields = infrastructureFields.map((field, index) => ({
+  ...field,
+  state: "mapped",
+}));
+const infrastructureResponses = Object.fromEntries(
+  mappedInfrastructureFields.map((field, index) => [
+    field.id,
+    field.responseType === "number" || field.responseType === "measurement"
+      ? String(1000 + index)
+      : `infra-${index}`,
+  ]),
+);
+const infrastructurePatch = patchTemplate(
+  officialFixture,
+  { responses: infrastructureResponses },
+  mappedInfrastructureFields,
+);
+assert.equal(infrastructurePatch.writtenTargets.length, mappedInfrastructureFields.length);
+assert.equal(
+  verifyTemplate(
+    infrastructurePatch.bytes,
+    mappedInfrastructureFields,
+    infrastructurePatch.writtenTargets,
+    infrastructurePatch.capturedValues,
+  ).valid,
+  true,
+);
+for (const field of mappedInfrastructureFields) {
+  assert.ok(infrastructurePatch.writtenTargets.includes(field.target), field.target);
+  assert.equal(infrastructurePatch.capturedValues[field.target], infrastructureResponses[field.id].toString());
+}
+const infrastructureZip = join(dir, "infrastructure-complete.xlsx");
+writeFileSync(infrastructureZip, infrastructurePatch.bytes);
+const infrastructureXml = execFileSync(
+  "unzip",
+  ["-p", infrastructureZip, "xl/worksheets/sheet4.xml"],
+  { encoding: "utf8" },
+);
+for (const field of mappedInfrastructureFields) {
+  const ref = field.target.split("!")[1].split(":")[0];
+  assert.ok(infrastructureXml.includes(`r="${ref}"`), `${field.target} missing from sheet4.xml`);
+}
+
 const photoField = {
   id: "photo-slot", sheet: "REPORTE FOTOGRAFICO", subsection: "Fotos", key: "photo-slot",
   label: "Foto", responseType: "observation", options: [], required: false, applicability: "",
@@ -234,6 +324,33 @@ assert.equal(execFileSync("unzip", ["-p", embeddedZip, "\\[Content_Types\\].xml"
 const drawingXml = execFileSync("unzip", ["-p", embeddedZip, "xl/drawings/drawing1.xml"], { encoding: "utf8" });
 assert.equal(drawingXml.includes("twoCellAnchor"), true);
 assert.equal(execFileSync("unzip", ["-p", embeddedZip, "xl/drawings/_rels/drawing1.xml.rels"], { encoding: "utf8" }).includes("image"), true);
+
+// A tower photo is a targeted evidence slot, not a report-page photo. It
+// must create a real drawing anchor on INFRAESTRUCTURA!B60.
+const towerPhoto = embedEvidence(
+  infrastructurePatch.bytes,
+  [{
+    id: "tower-photo",
+    bytes: Buffer.from("89504e470d0a1a0a", "hex"),
+    contentType: "image/png",
+    target: "INFRAESTRUCTURA!B60",
+  }],
+  mappedInfrastructureFields,
+);
+assert.equal(towerPhoto.valid, true);
+assert.deepEqual(towerPhoto.consumedPhotoIds, ["tower-photo"]);
+const towerZip = join(dir, "tower-photo.xlsx");
+writeFileSync(towerZip, towerPhoto.bytes);
+const towerSheetXml = execFileSync("unzip", ["-p", towerZip, "xl/worksheets/sheet4.xml"], { encoding: "utf8" });
+const towerDrawingId = towerSheetXml.match(/<drawing\b[^>]*r:id="([^"]+)"/)?.[1];
+assert.ok(towerDrawingId, "INFRAESTRUCTURA must reference a drawing after tower-photo export");
+const towerSheetRels = execFileSync("unzip", ["-p", towerZip, "xl/worksheets/_rels/sheet4.xml.rels"], { encoding: "utf8" });
+const towerDrawingTarget = towerSheetRels.match(new RegExp(`<Relationship[^>]*Id="${towerDrawingId}"[^>]*Target="([^"]+)"`))?.[1];
+assert.ok(towerDrawingTarget, "the tower drawing relationship must resolve");
+const towerDrawingName = `xl/drawings/${towerDrawingTarget.split("/").at(-1)}`;
+const towerDrawingXml = execFileSync("unzip", ["-p", towerZip, towerDrawingName], { encoding: "utf8" });
+assert.equal(towerDrawingXml.includes("Evidence tower-photo"), true);
+assert.equal(/<xdr:from><xdr:col>1<\/xdr:col>[\s\S]*?<xdr:row>59<\/xdr:row>/.test(towerDrawingXml), true);
 
 const overflowSource = zip([
   ["xl/workbook.xml", workbook],

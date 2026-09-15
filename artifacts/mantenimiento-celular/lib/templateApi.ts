@@ -66,7 +66,7 @@ export interface LocalTemplateExportInput {
   format: 'xlsx' | 'pdf';
   snapshot: unknown;
   fields: unknown[];
-  photos?: Array<{ id: string; contentBase64: string; contentType?: string }>;
+  photos?: Array<{ id: string; contentBase64: string; contentType?: string; target?: string }>;
 }
 
 function baseUrl(): string {
@@ -156,7 +156,7 @@ function unwrapCatalog(value: any): TemplateCatalog | null {
     editable: field.editable !== false && field.state !== 'ignored',
     isTitle: Boolean(field.isTitle || field.role === 'title'),
     mapped: field.mapped !== false && field.state !== 'ignored',
-     role: field.role,
+      role: field.role,
      questionId: field.questionId,
      questionLabel: field.questionLabel,
      row: field.row == null ? undefined : Number(field.row),

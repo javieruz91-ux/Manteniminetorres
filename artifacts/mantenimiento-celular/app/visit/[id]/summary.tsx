@@ -13,13 +13,30 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { saveAndShareTemplateExport } from '@/utils/templateExport';
 import { exportTemplate, exportTemplateLocally, getTemplateExportBlockReason } from '@/lib/templateApi';
 import { useTemplate } from '@/context/TemplateContext';
-import { AuditEvent, Finding } from '@/types';
+import { AuditEvent, Finding, Photo } from '@/types';
 import { getCloseEligibility } from '@/utils/maintenanceRules';
 import { createDemoCatalog } from '@/lib/demoTemplate';
 import { getLogicalEditableFields } from '@/utils/templateFields';
 import { catalogQuestions } from '@/utils/catalogNavigation';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
+
+function responsePhotos(value: unknown): Photo[] {
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter(photo =>
+          photo &&
+          typeof photo === 'object' &&
+          typeof photo.id === 'string' &&
+          typeof photo.uri === 'string',
+        ) as Photo[]
+      : [];
+  } catch {
+    return [];
+  }
+}
 
 export default function SummaryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -200,6 +217,17 @@ export default function SummaryScreen() {
     }
     try {
       setIsGenerating(true);
+      const towerPhotoFields = activeFields.filter(field =>
+        field.sheet === 'INFRAESTRUCTURA' &&
+        field.evidenceSlot === 'photo' &&
+        field.target?.cell,
+      );
+      const towerPhotos = towerPhotoFields.flatMap(field =>
+        responsePhotos(visit.responses[field.id]).map(photo => ({
+          photo,
+          target: `${field.sheet}!${field.target?.cell}`,
+        })),
+      );
       const result = sourceBase64
         ? await exportTemplateLocally({
             fileName: sourceFileName || catalog?.descriptor.fileName || 'reporte.xlsx',
@@ -224,11 +252,15 @@ export default function SummaryScreen() {
               ignoreReason: null,
             })),
             photos: await Promise.all(
-              visit.findings.flatMap(finding => finding.photos).map(async photo => ({
-                id: photo.id,
-                contentBase64: await photoToBase64(photo.uri),
-                contentType: photo.uri.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg',
-              })),
+              ([
+                ...visit.findings.flatMap(finding => finding.photos).map(photo => ({ photo })),
+                ...towerPhotos,
+              ] as Array<{ photo: Photo; target?: string }>).map(async ({ photo, target }) => ({
+                  id: photo.id,
+                  contentBase64: await photoToBase64(photo.uri),
+                  contentType: photo.uri.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg',
+                  ...(target ? { target } : {}),
+                })),
             ),
           })
         : await exportTemplate(visit.id, format);

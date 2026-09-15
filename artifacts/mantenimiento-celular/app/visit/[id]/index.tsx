@@ -16,9 +16,10 @@ import { useColors } from '@/hooks/useColors';
 import { Card } from '@/components/Card';
 import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
+import { PhotoPicker } from '@/components/PhotoPicker';
 import { useTemplate } from '@/context/TemplateContext';
 import { createDemoCatalog } from '@/lib/demoTemplate';
-import type { ChecklistStatus, Finding, TemplateField } from '@/types';
+import type { ChecklistStatus, Finding, Photo, TemplateField } from '@/types';
 import {
   buildCapturePages,
   catalogQuestions,
@@ -66,6 +67,22 @@ function fieldMatchesSearch(field: TemplateField, search: string): boolean {
   return [field.label, field.fullText, field.sheet, field.section, field.subsection]
     .filter(Boolean)
     .some(value => String(value).toLocaleLowerCase().includes(query));
+}
+
+function responsePhotos(value: unknown): Photo[] {
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter(photo =>
+      photo && typeof photo === 'object' && typeof photo.id === 'string' && typeof photo.uri === 'string',
+    ) as Photo[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function serializePhotos(photos: Photo[]): string {
+  return JSON.stringify(photos);
 }
 
 export default function VisitDetailScreen() {
@@ -447,6 +464,7 @@ function CaptureCard({
   if (!visit) return null;
   const { field, additionalFields } = question;
   const finding = visit.findings.find(candidate => candidate.pointId === field.id);
+  const fieldPhotos = responsePhotos(visit.responses[field.id]);
   return (
     <View testID={`question-card-${field.id}`} style={[styles.questionCard, { borderColor: colors.border, backgroundColor: colors.card }]}>
       <View style={styles.questionTitleRow}>
@@ -458,7 +476,7 @@ function CaptureCard({
         </View>
         {finding && <Feather name="alert-triangle" size={18} color={colors.warning} />}
       </View>
-      {field.type === 'status' && (
+      {field.role !== 'standalone' && field.type === 'status' && (
         <View style={styles.statusRow}>
           {statusOptions.map(option => {
             const selected = status === option.value;
@@ -492,16 +510,37 @@ function CaptureCard({
           })}
         </View>
       )}
-      <Input
-        label="Observación"
-        value={String(visit.responses[questionObservationId(field.id)] ?? '')}
-        editable={!readOnly}
-        multiline
-        numberOfLines={2}
-        onChangeText={value => onValue(questionObservationId(field.id), value)}
-        placeholder="Escribe una observación breve"
-        style={styles.observation}
-      />
+      {field.role !== 'standalone' && (
+        <Input
+          label="Observación"
+          value={String(visit.responses[questionObservationId(field.id)] ?? '')}
+          editable={!readOnly}
+          multiline
+          numberOfLines={2}
+          onChangeText={value => onValue(questionObservationId(field.id), value)}
+          placeholder="Escribe una observación breve"
+          style={styles.observation}
+        />
+      )}
+      {field.role === 'standalone' && field.evidenceSlot === 'photo' && (
+        <PhotoPicker
+          photos={fieldPhotos}
+          type="GENERAL"
+          label={field.label}
+          disabled={readOnly}
+          onAdd={photo => onValue(field.id, serializePhotos([...fieldPhotos, photo]))}
+          onRemove={photoId => onValue(field.id, serializePhotos(fieldPhotos.filter(photo => photo.id !== photoId)))}
+        />
+      )}
+      {field.role === 'standalone' && field.evidenceSlot !== 'photo' && (
+        <AdditionalField
+          field={field}
+          value={visit.responses[field.id]}
+          readOnly={readOnly}
+          colors={colors}
+          onValue={value => onValue(field.id, value)}
+        />
+      )}
       {additionalFields.map(additional => (
         <AdditionalField
           key={additional.id}
@@ -512,7 +551,7 @@ function CaptureCard({
           onValue={value => onValue(additional.id, value)}
         />
       ))}
-      {(status === 'NOK' || status === 'SC') && (
+      {field.role !== 'standalone' && (status === 'NOK' || status === 'SC') && (
         <View style={styles.findingBox}>
           <Text style={[styles.findingHint, { color: colors.warning }]}>
             Este punto requiere una descripción y al menos una fotografía.

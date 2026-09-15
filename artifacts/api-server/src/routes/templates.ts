@@ -167,10 +167,11 @@ router.post("/templates/export-local", async (req, res) => {
     const exportCatalog = Array.isArray(fields) ? fields : parsed.catalog;
     const patched = patchTemplate(source, snapshot, exportCatalog);
     const evidencePhotos = Array.isArray(photos)
-      ? photos.map((photo: { id: string; contentBase64: string; contentType?: string }) => ({
+      ? photos.map((photo: { id: string; contentBase64: string; contentType?: string; target?: string }) => ({
           id: photo.id,
           bytes: Buffer.from(photo.contentBase64, "base64"),
           contentType: photo.contentType ?? "image/jpeg",
+        target: photo.target,
         }))
       : [];
     const embedded = embedEvidence(patched.bytes, evidencePhotos, exportCatalog);

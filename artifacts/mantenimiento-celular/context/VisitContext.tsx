@@ -1169,5 +1169,12 @@ function normalizeWireTemplateField(field: any): TemplateField {
     editable: field.state !== 'ignored',
     mapped: field.state !== 'unresolved',
     isTitle: false,
+    role: field.role,
+    questionId: field.questionId,
+    questionLabel: field.questionLabel,
+    row: field.row == null ? undefined : Number(field.row),
+    logical: field.logical === undefined ? undefined : Boolean(field.logical),
+    observationTarget: field.observationTarget ?? null,
+    defaultValue: field.defaultValue == null ? undefined : String(field.defaultValue),
   };
 }

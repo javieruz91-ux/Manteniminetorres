@@ -18,7 +18,7 @@ export const EXPECTED_SHEETS = [
   ["base", 1, 1],
 ] as const;
 export const PHOTO_SLOT_COUNT = 16;
-export const CATALOG_SCHEMA_VERSION = 2;
+export const CATALOG_SCHEMA_VERSION = 3;
 const PHOTO_SLOT_START_ROW = 3;
 const OFFICIAL_PHOTO_SLOT_REFS = [
   "REPORTE FOTOGRAFICO!A10:F27", "REPORTE FOTOGRAFICO!H10:M27",
@@ -39,7 +39,7 @@ export type TemplateField = {
   applicability: string; evidenceSlot: "photo" | "observation" | "none";
   target: string; sourceEvidence: string; confidence: number;
   state: "mapped" | "ignored" | "unresolved"; ignoreReason: string | null;
-  role?: "presentation" | "question" | "additional";
+  role?: "presentation" | "question" | "additional" | "standalone";
   questionId?: string;
   questionLabel?: string;
   row?: number;
@@ -101,6 +101,7 @@ export type EvidencePhoto = {
   id: string;
   bytes: Buffer;
   contentType: string;
+  target?: string;
 };
 
 function unescapeXml(value: string): string {
@@ -384,6 +385,18 @@ export function embedEvidence(
   photos: EvidencePhoto[],
   catalog: TemplateField[],
 ): { bytes: Buffer; consumedPhotoIds: string[]; details: string[]; valid: boolean } {
+  const targetedPhotos = photos.filter((photo) => Boolean(photo.target));
+  if (targetedPhotos.length > 0) {
+    const reportResult = embedEvidence(bytes, photos.filter((photo) => !photo.target), catalog);
+    if (!reportResult.valid) return reportResult;
+    const targetedResult = embedTargetedEvidence(reportResult.bytes, targetedPhotos);
+    return {
+      bytes: targetedResult.bytes,
+      consumedPhotoIds: [...reportResult.consumedPhotoIds, ...targetedResult.consumedPhotoIds],
+      details: [...reportResult.details, ...targetedResult.details],
+      valid: targetedResult.valid,
+    };
+  }
   const parsed = zipEntries(bytes);
   const sheets = workbookSheets(parsed.entries);
   const mappedPhotoFields = catalog
@@ -555,6 +568,117 @@ export function embedEvidence(
     : ["No se pudieron verificar todas las fotografías embebidas o la dimensión esperada"], valid: allPresent && dimensionValid };
 }
 
+function updateBinaryEntry(entry: ZipEntry, data: Buffer): void {
+  updateEntryData(entry, data);
+}
+
+function embedTargetedEvidence(
+  bytes: Buffer,
+  photos: EvidencePhoto[],
+): { bytes: Buffer; consumedPhotoIds: string[]; details: string[]; valid: boolean } {
+  const parsed = zipEntries(bytes);
+  const sheets = workbookSheets(parsed.entries);
+  const consumedPhotoIds: string[] = [];
+  for (let index = 0; index < photos.length; index++) {
+    const photo = photos[index];
+    const target = photo.target;
+    if (!target) continue;
+    const [sheetName, rawRef] = target.split("!");
+    const sheet = sheets.find((item) => item.name === sheetName);
+    const worksheet = sheet && parsed.entries.find((entry) => entry.name === sheet.path);
+    if (!sheet || !worksheet) return { bytes, consumedPhotoIds, details: [`Falta la hoja de fotografía ${sheetName}`], valid: false };
+    const extension = photo.contentType.includes("png")
+      ? "png"
+      : photo.contentType.includes("jpeg") || photo.contentType.includes("jpg") ? "jpg" : "";
+    if (!extension) return { bytes, consumedPhotoIds, details: [`Tipo de imagen no soportado para ${photo.id}`], valid: false };
+    const mediaPath = `xl/media/target-${sha256(photo.bytes).slice(0, 16)}-${index}.${extension}`;
+    if (!parsed.entries.some((entry) => entry.name === mediaPath)) {
+      parsed.entries.push(newStoredEntry(mediaPath, photo.bytes));
+    }
+    let worksheetXml = xmlData(worksheet);
+    const relsPath = `${sheet.path.slice(0, sheet.path.lastIndexOf("/"))}/_rels/${sheet.path.slice(sheet.path.lastIndexOf("/") + 1)}.rels`;
+    let worksheetRels = parsed.entries.find((entry) => entry.name === relsPath);
+    let worksheetRelsXml = worksheetRels
+      ? xmlData(worksheetRels)
+      : `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
+    const drawingMatch = /<drawing\b[^>]*\br:id="([^"]+)"[^>]*\/?>/i.exec(worksheetXml);
+    let drawing: ZipEntry;
+    let drawingPath: string;
+    let drawingRels: ZipEntry | undefined;
+    let drawingRelsXml: string;
+    let drawingRelId: string;
+    if (drawingMatch) {
+      drawingRelId = drawingMatch[1];
+      const relationship = [...worksheetRelsXml.matchAll(/<Relationship\b([^>]*)\/?>/g)]
+        .map((match) => ({ id: attr(match[1], "Id"), target: attr(match[1], "Target") }))
+        .find((item) => item.id === drawingRelId);
+      if (!relationship?.target) return { bytes, consumedPhotoIds, details: [`No se resolvió el drawing de ${sheetName}`], valid: false };
+      drawingPath = normalizePackagePath(sheet.path.slice(0, sheet.path.lastIndexOf("/")), relationship.target);
+      drawing = parsed.entries.find((entry) => entry.name === drawingPath)!;
+      if (!drawing) return { bytes, consumedPhotoIds, details: [`Falta el drawing de ${sheetName}`], valid: false };
+      const drawingRelsPath = `${drawingPath.slice(0, drawingPath.lastIndexOf("/"))}/_rels/${drawingPath.slice(drawingPath.lastIndexOf("/") + 1)}.rels`;
+      drawingRels = parsed.entries.find((entry) => entry.name === drawingRelsPath);
+      drawingRelsXml = drawingRels
+        ? xmlData(drawingRels)
+        : `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
+    } else {
+      const drawingNumber = parsed.entries.filter((entry) => /^xl\/drawings\/drawing\d+\.xml$/.test(entry.name)).length + 1;
+      drawingPath = `xl/drawings/drawing${drawingNumber}.xml`;
+      drawing = newStoredEntry(drawingPath, Buffer.from(
+        `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"></xdr:wsDr>`,
+      ));
+      parsed.entries.push(drawing);
+      drawingRelId = nextRelationshipId(worksheetRelsXml);
+      worksheetRelsXml = worksheetRelsXml.replace(
+        "</Relationships>",
+        `<Relationship Id="${drawingRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/${drawingPath.split("/").pop()}"/></Relationships>`,
+      );
+      worksheetXml = worksheetXml.replace("</worksheet>", `<drawing r:id="${drawingRelId}"/></worksheet>`);
+      const drawingRelsPath = `xl/drawings/_rels/${drawingPath.split("/").pop()}.rels`;
+      drawingRelsXml = `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
+      drawingRels = newStoredEntry(drawingRelsPath, Buffer.from(drawingRelsXml));
+      parsed.entries.push(drawingRels);
+    }
+    const relationshipId = nextRelationshipId(drawingRelsXml);
+    drawingRelsXml = drawingRelsXml.replace(
+      "</Relationships>",
+      `<Relationship Id="${relationshipId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${mediaPath.split("/").pop()}"/></Relationships>`,
+    );
+    const drawingXml = xmlData(drawing).replace(
+      /<\/(?:xdr:wsDr|wsDr)>\s*$/i,
+      `${evidenceAnchor(rawRef, relationshipId, nextDrawingShapeId(xmlData(drawing)) + index, `Evidence ${photo.id}`)}</xdr:wsDr>`,
+    );
+    updateBinaryEntry(drawing, Buffer.from(drawingXml));
+    if (drawingRels) updateBinaryEntry(drawingRels, Buffer.from(drawingRelsXml));
+    if (!worksheetRels) {
+      worksheetRels = newStoredEntry(relsPath, Buffer.from(worksheetRelsXml));
+      parsed.entries.push(worksheetRels);
+    } else {
+      updateBinaryEntry(worksheetRels, Buffer.from(worksheetRelsXml));
+    }
+    updateBinaryEntry(worksheet, Buffer.from(worksheetXml));
+    const contentTypes = parsed.entries.find((entry) => entry.name === "[Content_Types].xml");
+    if (contentTypes) {
+      let contentXml = xmlData(contentTypes);
+      if (!/<Default\b[^>]*Extension="png"/i.test(contentXml)) contentXml = contentXml.replace("</Types>", `<Default Extension="png" ContentType="image/png"/></Types>`);
+      if (!/<Default\b[^>]*Extension="jpg"/i.test(contentXml)) contentXml = contentXml.replace("</Types>", `<Default Extension="jpg" ContentType="image/jpeg"/></Types>`);
+      const drawingPart = `/xl/drawings/${drawingPath.split("/").pop()}`;
+      if (!new RegExp(`<Override\\b[^>]*PartName="${drawingPart.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "i").test(contentXml)) {
+        contentXml = contentXml.replace("</Types>", `<Override PartName="${drawingPart}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>`);
+      }
+      updateBinaryEntry(contentTypes, Buffer.from(contentXml));
+    }
+    consumedPhotoIds.push(photo.id);
+  }
+  const output = zipXml(parsed.entries, parsed.comment);
+  return {
+    bytes: output,
+    consumedPhotoIds,
+    details: [`${consumedPhotoIds.length} fotografía(s) colocada(s) en sus celdas objetivo`],
+    valid: consumedPhotoIds.length === photos.length,
+  };
+}
+
 function rebuildLocalHeader(entry: ZipEntry): Buffer {
   const nameLen = entry.local.readUInt16LE(26);
   const extraLen = entry.local.readUInt16LE(28);
@@ -706,6 +830,54 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
     input: Omit<TemplateField, "state" | "ignoreReason" | "confidence">,
   ): TemplateField => ({ ...input, state: "mapped", ignoreReason: null, confidence: 1 });
 
+  const infrastructureRadiationBlocks = [
+    { name: "LTE", sectionRow: 63, sectorRows: [65, 75, 85], sectors: ["SECTOR 001", "SECTOR 002", "SECTOR 003"], ret: true },
+    { name: "UMTS 850", sectionRow: 97, sectorRows: [99, 109, 119], sectors: ["SECTOR X", "SECTOR Y", "SECTOR Z"], ret: true },
+    { name: "UMTS 850 SAO", sectionRow: 129, sectorRows: [131, 141, 151], sectors: ["SECTOR X", "SECTOR Y", "SECTOR Z"], ret: true },
+    { name: "UMTS 1900", sectionRow: 161, sectorRows: [163, 173, 183], sectors: ["SECTOR X", "SECTOR Y", "SECTOR Z"], ret: true },
+    { name: "GSM 1900", sectionRow: 193, sectorRows: [195, 204, 213], sectors: ["SECTOR A", "SECTOR B", "SECTOR C"], ret: false },
+    { name: "GSM 850", sectionRow: 222, sectorRows: [224, 233, 242], sectors: ["SECTOR A", "SECTOR B", "SECTOR C"], ret: false },
+    { name: "5G", sectionRow: 251, sectorRows: [253, 262, 271], sectors: ["SECTOR A", "SECTOR B", "SECTOR C"], ret: false },
+  ] as const;
+  const radiationValueLabels = [
+    "Inclinación eléctrica.",
+    "Aislamiento en conectores y Kits-Tierra.",
+    "Altura de radiación del sector en MTS.",
+    "Estado general de la antena",
+  ];
+  const addInfrastructureField = (
+    target: string,
+    label: string,
+    responseType: ResponseType,
+    section: string,
+    options: string[] = [],
+    evidenceSlot: TemplateField["evidenceSlot"] = "none",
+  ) => {
+    const row = Number(target.match(/\d+/)?.[0] ?? 0);
+    catalog.push(makeField({
+      id: `INFRAESTRUCTURA:field:${target.replace(/[^A-Z0-9]+/gi, "-")}`,
+      sheet: "INFRAESTRUCTURA",
+      section,
+      subsection: section,
+      key: label,
+      label,
+      responseType,
+      options,
+      required: false,
+      applicability: "infrastructure",
+      evidenceSlot,
+      target: `INFRAESTRUCTURA!${target}`,
+      sourceEvidence: `${target}: ${label}`,
+      role: "standalone",
+      row,
+      logical: true,
+    }));
+  };
+  const addCellPlanMarkers = (row: number, block: string, sector: string, label: string) => {
+    addInfrastructureField(`H${row}`, `${block} · ${sector} · ${label} · SI (marcar X)`, "selection", block, ["X"]);
+    addInfrastructureField(`J${row}`, `${block} · ${sector} · ${label} · NO (marcar X)`, "selection", block, ["X"]);
+  };
+
   const presentationDefinitions: Array<[string, string, ResponseType, string, string[]]> = [
     ["mnemónico", "A12", "text", "Mnemonico", []],
     ["mnemónicos del sitio", "A13", "text", "Mnemonico(s) de sitio", []],
@@ -755,6 +927,58 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
       rows.set(cell.row, row);
     }
     let section = sheet.name;
+    if (sheet.name === "INFRAESTRUCTURA") {
+      const section = "Conteo de antenas de torre";
+      addInfrastructureField("D45", "Cantidad de tramos con los que está construida la torre", "selection", section,
+        [...Array(12)].map((_, index) => String(index + 1)));
+      for (let row = 48; row <= 59; row++) {
+        const tramo = cells.get(`D${row}`)?.value.trim() || `Tramo ${60 - row}`;
+        addInfrastructureField(`F${row}`, `${tramo} · Ubicación de plataforma`, "selection", section, ["X"]);
+        addInfrastructureField(`G${row}`, `${tramo} · Cantidad de antenas RF`, "number", section);
+        addInfrastructureField(`H${row}`, `${tramo} · Cantidad de antenas microondas`, "number", section);
+        addInfrastructureField(`I${row}`, `${tramo} · Cantidad de equipos RRU`, "number", section);
+      }
+      addInfrastructureField("B60", "Fotografía completa de torre del sitio", "observation", section, [], "photo");
+
+      const radiationLabels = [
+        "Sector",
+        "Marca/Modelo de antenas",
+        "Orientación magnética o azimut",
+        "Inclinación mecánica",
+      ];
+      for (const block of infrastructureRadiationBlocks) {
+        for (let sectorIndex = 0; sectorIndex < block.sectorRows.length; sectorIndex++) {
+          const start = block.sectorRows[sectorIndex];
+          const sector = block.sectors[sectorIndex];
+          const blockSection = `Sistema de radiación ${block.name}`;
+          for (let offset = 0; offset < 4; offset++) {
+            addCellPlanMarkers(start + offset, block.name, sector, radiationLabels[offset]);
+          }
+          for (let offset = 0; offset < radiationValueLabels.length; offset++) {
+            const row = start + 4 + offset;
+            const type: ResponseType = offset === 2 ? "measurement" : "text";
+            addInfrastructureField(`D${row}`, `${block.name} · ${sector} · ${radiationValueLabels[offset]}`, type, blockSection);
+          }
+          if (block.ret) {
+            const retRow = start + 8;
+            addInfrastructureField(`E${retRow}:F${retRow}`, `${block.name} · ${sector} · Modelo de RET`, "text", blockSection);
+            addInfrastructureField(`H${retRow}`, `${block.name} · ${sector} · Cantidad de RET`, "number", blockSection);
+            addInfrastructureField(`J${retRow}`, `${block.name} · ${sector} · Device No. de RET`, "text", blockSection);
+          }
+        }
+      }
+      audit.push({
+        type: "infrastructure-explicit-map",
+        towerSections: 1,
+        towerRows: 12,
+        radiationBlocks: infrastructureRadiationBlocks.map((block) => ({
+          name: block.name,
+          sectors: block.sectorRows.length,
+          ret: block.ret,
+        })),
+        excludedText: "EJEMPLO DE TRAMOS",
+      });
+    }
     const usedLabels = new Map<string, number>();
     const additionalTarget = (row: number, col: number): string | null => {
       for (let offset = 1; offset <= 3; offset++) {
@@ -812,6 +1036,7 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
     };
 
     for (const [rowNumber, rowCells] of [...rows.entries()].sort(([a], [b]) => a - b)) {
+      if (sheet.name === "INFRAESTRUCTURA" && rowNumber >= 44) continue;
       const a = rowCells.get("A")?.value.trim() ?? "";
       const b = rowCells.get("B")?.value.trim() ?? "";
       const c = rowCells.get("C")?.value.trim() ?? "";
@@ -1255,7 +1480,7 @@ export function patchTemplate(bytes: Buffer, snapshot: unknown, catalog: Templat
     writtenTargets.push(target);
     capturedValues[target] = String(value ?? "");
   };
-  for (const field of catalog.filter((f) => f.state === "mapped" && f.evidenceSlot !== "photo" && !f.target.endsWith("!__evidence__"))) {
+  for (const field of catalog.filter((f) => f.state === "mapped" && !f.target.endsWith("!__evidence__"))) {
     const value = findValue(snapshot, field);
     if (value === undefined || value === null || value === "") continue;
     const writeValue = (field.responseType === "number" || field.responseType === "measurement") &&
