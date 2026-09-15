@@ -873,6 +873,34 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
       logical: true,
     }));
   };
+  const addStandaloneField = (
+    sheetName: string,
+    target: string,
+    label: string,
+    responseType: ResponseType,
+    fieldSection: string,
+    options: string[] = [],
+  ) => {
+    const row = Number(target.match(/\d+/)?.[0] ?? 0);
+    catalog.push(makeField({
+      id: `${sheetName}:field:${target.replace(/[^A-Z0-9]+/gi, "-")}`,
+      sheet: sheetName,
+      section: fieldSection,
+      subsection: fieldSection,
+      key: label,
+      label,
+      responseType,
+      options,
+      required: false,
+      applicability: "standalone",
+      evidenceSlot: "none",
+      target: `${sheetName}!${target}`,
+      sourceEvidence: `${target}: ${label}`,
+      role: "standalone",
+      row,
+      logical: true,
+    }));
+  };
   const addCellPlanMarkers = (row: number, block: string, sector: string, label: string) => {
     addInfrastructureField(`H${row}`, `${block} · ${sector} · ${label} · SI (marcar X)`, "selection", block, ["X"]);
     addInfrastructureField(`J${row}`, `${block} · ${sector} · ${label} · NO (marcar X)`, "selection", block, ["X"]);
@@ -927,6 +955,76 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
       rows.set(cell.row, row);
     }
     let section = sheet.name;
+    if (sheet.name === "TRANSMISION") {
+      const transmissionSection = "Enlaces de microondas";
+      const transmissionLinks = [
+        { index: 1, targets: ["G8", "F9", "G9", "H9", "I9", "J9"] },
+        { index: 2, targets: ["G10", "F11", "G11", "H11", "I11", "J11"] },
+      ] as const;
+      for (const link of transmissionLinks) {
+        const labels = [
+          "Identificador",
+          "Punta A",
+          "Nivel RX de punta A",
+          "Punta B",
+          "Nivel RX de punta B",
+          "Nivel RX adicional",
+        ];
+        link.targets.forEach((target, index) => {
+          addStandaloneField(
+            sheet.name,
+            target,
+            `Enlace de microondas ${link.index} · ${labels[index]}`,
+            "text",
+            transmissionSection,
+          );
+        });
+      }
+      addStandaloneField(
+        sheet.name,
+        "C14",
+        "Modelo de CELL SITE ROUTER / AGREGADOR",
+        "text",
+        "CELL SITE ROUTER / AGREGADOR",
+      );
+      audit.push({
+        type: "transmission-explicit-map",
+        links: transmissionLinks.map((link) => ({ index: link.index, targets: [...link.targets] })),
+        routerModelTarget: "C14",
+      });
+    }
+    if (sheet.name === "(HW) ALARMAS DE FUERZA") {
+      const ericssonLabels = [
+        "Elemento monitoreado",
+        "Texto estándar para alta y configuración",
+        "Severidad",
+        "Observaciones",
+        "SUP",
+        "Número de OVP",
+        "Posición",
+        "Código de colores",
+        "Nombre de alarma / posición en SAU",
+        "Estatus",
+      ];
+      const ericssonColumns = [..."ABCDEFGHIJ"];
+      for (let row = 76; row <= 81; row++) {
+        ericssonColumns.forEach((column, index) => {
+          addStandaloneField(
+            sheet.name,
+            `${column}${row}`,
+            `Alarma Ericsson ${row - 75} · ${ericssonLabels[index]}`,
+            index === 9 ? "selection" : "text",
+            "Alarmas Ericsson",
+            index === 9 ? ["OK", "NOK", "SC", "NA"] : [],
+          );
+        });
+      }
+      audit.push({
+        type: "ericsson-explicit-map",
+        rows: [76, 77, 78, 79, 80, 81],
+        columns: ericssonColumns,
+      });
+    }
     if (sheet.name === "INFRAESTRUCTURA") {
       const section = "Conteo de antenas de torre";
       addInfrastructureField("D45", "Cantidad de tramos con los que está construida la torre", "selection", section,
@@ -1064,6 +1162,16 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
         }
         continue;
       }
+      if (sheet.name === "TRANSMISION" && rowNumber >= 8 && rowNumber <= 27) {
+        // Link cells and the router model are mapped explicitly above. The
+        // remaining rows in this range are the original status questions.
+        // Do not infer adjacent labels as duplicate additional fields.
+      }
+      if (sheet.name === "(HW) ALARMAS DE FUERZA" && rowNumber >= 69) {
+        // The Ericsson table is mapped as standalone cells above; its header
+        // and instructions are not checklist questions.
+        continue;
+      }
       if (sheet.name === "PLANTA HUAWEI" && !huaweiStatusRows.has(rowNumber)) {
         continue;
       }
@@ -1072,7 +1180,9 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
       else if (a && c && /^\d/.test(a) && !catalogIsInstruction(a)) label = `${a} · ${c}`;
       if (!label || catalogIsHeader(label) || catalogIsInstruction(label) || d) continue;
       if (catalogMergedSecondary(`B${rowNumber}`, merged)) continue;
-      const additionalLabels = [...rowCells.values()]
+      const additionalLabels = sheet.name === "TRANSMISION"
+        ? []
+        : [...rowCells.values()]
         .filter((cell) => cell.col > 2 && cell.value.trim() && !cell.formula &&
           !catalogIsHeader(cell.value) && !catalogIsInstruction(cell.value) &&
           catalogAdditionalLabel(cell.value))
