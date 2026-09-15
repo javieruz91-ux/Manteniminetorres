@@ -1,4 +1,5 @@
 - [Offline sync consistency](offline-sync-consistency.md) — preserve revision identity across every durable-write and network boundary; validate mobile/server vocabularies together.
 - [Excel template source of truth](excel-template-source-of-truth.md) — production fields and reports come only from an owner-uploaded, audited, version-pinned XLSX.
 - [OOXML parser compatibility](ooxml-parser-compatibility.md) — parse self-closing and paired XML nodes with one bounded pattern; real workbooks mix both forms.
+- [OOXML label verification](ooxml-label-verification.md) — verify cell destinations in sheet XML and original labels/units in sharedStrings.xml.
 - [Web publication architecture](web-publish-architecture.md) — serve Expo Web at the browser root while preserving Expo Go manifests and local-first XLSX behavior.
