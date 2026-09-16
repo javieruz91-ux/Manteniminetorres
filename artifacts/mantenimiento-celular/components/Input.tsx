@@ -1,5 +1,5 @@
 import React from 'react';
-import { TextInput, View, Text, StyleSheet, TextInputProps } from 'react-native';
+import { Platform, TextInput, View, Text, StyleSheet, TextInputProps } from 'react-native';
 import { useColors } from '../hooks/useColors';
 
 interface InputProps extends TextInputProps {
@@ -7,8 +7,35 @@ interface InputProps extends TextInputProps {
   error?: string;
 }
 
+function eventValue(event: unknown): string {
+  if (event && typeof event === 'object') {
+    const candidate = event as {
+      nativeEvent?: { text?: unknown };
+      target?: { value?: unknown };
+    };
+    if (typeof candidate.nativeEvent?.text === 'string') return candidate.nativeEvent.text;
+    if (typeof candidate.target?.value === 'string') return candidate.target.value;
+  }
+  return '';
+}
+
 export function Input({ label, error, style, ...props }: InputProps) {
   const colors = useColors();
+  const { onChangeText, onChange, ...inputProps } = props;
+  const webInputProps = Platform.OS === 'web'
+    ? {
+        ...inputProps,
+        onChangeText: undefined,
+        onChange: (event: unknown) => {
+          onChangeText?.(eventValue(event));
+          onChange?.(event as Parameters<NonNullable<TextInputProps['onChange']>>[0]);
+        },
+      }
+    : {
+        ...inputProps,
+        onChangeText,
+        onChange,
+      };
 
   return (
     <View style={styles.container}>
@@ -30,7 +57,7 @@ export function Input({ label, error, style, ...props }: InputProps) {
           style,
         ]}
         placeholderTextColor={colors.mutedForeground}
-        {...props}
+        {...webInputProps}
       />
       {error && (
         <Text style={[styles.error, { color: colors.destructive, fontFamily: 'Inter_400Regular' }]}>

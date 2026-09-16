@@ -8,6 +8,23 @@ function responseInput(page, fieldId) {
   return page.locator(`[data-testid="response-${fieldId}"]`);
 }
 
+async function storedResponse(page, visitId, fieldId) {
+  return page.evaluate(({ visitId: id, fieldId: key }) => {
+    const raw = localStorage.getItem('@mantenimiento_visits_guest');
+    const visits = raw ? JSON.parse(raw) : [];
+    return visits.find(visit => visit.id === id)?.responses?.[key];
+  }, { visitId, fieldId });
+}
+
+async function waitForStoredResponse(page, visitId, fieldId, expected) {
+  await page.waitForFunction(({ id, key, value }) => {
+    const raw = localStorage.getItem('@mantenimiento_visits_guest');
+    if (!raw) return false;
+    const visits = JSON.parse(raw);
+    return visits.find(visit => visit.id === id)?.responses?.[key] === value;
+  }, { id: visitId, key: fieldId, value: expected });
+}
+
 async function waitForVisible(page, selector, timeout = 20_000) {
   const locator = page.locator(selector).first();
   try {
@@ -70,7 +87,16 @@ async function main() {
     const visitId = visitUrl.match(/\/visit\/([^/]+)$/)?.[1];
     assert.ok(visitId, 'Visit id was not found after creation');
 
-    await (await responseInput(page, presentation.id)).fill('PRUEBA-PERSISTENCIA');
+    const presentationInput = await responseInput(page, presentation.id);
+    await presentationInput.click();
+    await presentationInput.pressSequentially('PRUEBA-PERSISTENCIA');
+    await presentationInput.blur();
+    await waitForStoredResponse(page, visitId, presentation.id, 'PRUEBA-PERSISTENCIA');
+    assert.equal(
+      await storedResponse(page, visitId, presentation.id),
+      'PRUEBA-PERSISTENCIA',
+      'The mnemónico must be in the stored visit before saving',
+    );
     await (await responseInput(page, siteName.id)).fill('SITIO-PERSISTENTE');
     await page.getByTestId('sheet-ELECTROMECANICA').click();
     const sectionChip = page.getByTestId(`section-${question.section}`);
@@ -84,11 +110,21 @@ async function main() {
 
     await page.getByText('Guardar y continuar después', { exact: true }).click();
     await page.waitForURL(url => new URL(url).pathname === '/', { timeout: 20_000 });
+    assert.equal(
+      await storedResponse(page, visitId, presentation.id),
+      'PRUEBA-PERSISTENCIA',
+      'The mnemónico must remain in storage after saving',
+    );
     await page.reload({ waitUntil: 'domcontentloaded' });
     await waitForVisible(page, '[data-testid^="visit-card-"]');
     await page.locator('[data-testid^="visit-card-"]').first().click();
     await page.waitForURL(/\/visit\/[^/]+$/, { timeout: 20_000 });
     assert.equal(await (await responseInput(page, presentation.id)).inputValue(), 'PRUEBA-PERSISTENCIA');
+    assert.equal(
+      await storedResponse(page, visitId, presentation.id),
+      'PRUEBA-PERSISTENCIA',
+      'The mnemónico must remain in storage after reload and reopen',
+    );
     assert.equal(await (await responseInput(page, siteName.id)).inputValue(), 'SITIO-PERSISTENTE');
 
     await page.getByTestId('sheet-ELECTROMECANICA').click();
