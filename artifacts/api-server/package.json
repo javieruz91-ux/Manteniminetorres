@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
+    "dev:local": "pnpm run start:local",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
+    "start:local": "node --experimental-strip-types --enable-source-maps ./src/local.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node tests/xlsxTemplate.test.mjs"
   },

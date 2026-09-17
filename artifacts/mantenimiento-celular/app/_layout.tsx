@@ -22,9 +22,10 @@ import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 import { setAuthTokenGetter, setBaseUrl } from "@workspace/api-client-react";
 import { AuthProvider } from "@/lib/auth";
+import { getApiBaseUrl } from '@/lib/runtimeConfig';
 
-const domain = process.env.EXPO_PUBLIC_DOMAIN;
-if (domain) setBaseUrl(`https://${domain}`);
+const apiBaseUrl = getApiBaseUrl();
+if (apiBaseUrl) setBaseUrl(apiBaseUrl);
 setAuthTokenGetter(async () => {
   if (Platform.OS === 'web') return localStorage.getItem('auth_session_token');
   return await SecureStore.getItemAsync('auth_session_token');

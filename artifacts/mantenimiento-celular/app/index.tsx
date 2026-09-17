@@ -1,7 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Platform } from 'react-native';
 import { useVisits } from '@/context/VisitContext';
-import { useAuth } from '@/lib/auth';
 import { useColors } from '@/hooks/useColors';
 import { Feather } from '@expo/vector-icons';
 import { Button } from '@/components/Button';
@@ -13,16 +12,20 @@ import { useTemplate } from '@/context/TemplateContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getVisitConvenienceFields } from '@/utils/maintenanceRules';
 import { saveAndShareTemplateExport } from '@/utils/templateExport';
-import { exportBlankTemplate } from '@/lib/templateApi';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { MIME_XLSX } from '@/lib/templateApi';
 import { createDemoCatalog } from '@/lib/demoTemplate';
 
 export default function DashboardScreen() {
-  const { visits, createVisit, isOnline, isDemoMode, resetDemoData } = useVisits();
-  const { user, login, logout, isAuthenticated } = useAuth();
-  const { catalog, isLoading: templateLoading, uploadLocal } = useTemplate();
+  const { visits, createVisit, isOnline, isDemoMode, isLocalMode, resetDemoData } = useVisits();
+  const {
+    catalog,
+    isLoading: templateLoading,
+    uploadLocal,
+    sourceBase64,
+    sourceFileName,
+  } = useTemplate();
   const demoFields = React.useMemo(() => createDemoCatalog().fields, []);
   const colors = useColors();
   const router = useRouter();
@@ -91,21 +94,17 @@ export default function DashboardScreen() {
   };
 
   const handleDownloadBlankTemplate = async () => {
-    if (!isAuthenticated) {
-      Alert.alert(
-        'Iniciar sesión requerido',
-        'Inicia sesión para descargar la plantilla Excel original de tu organización.',
-        [{ text: 'Cancelar', style: 'cancel' }, { text: 'Iniciar sesión', onPress: login }],
-      );
+    if (!sourceBase64) {
+      Alert.alert('Plantilla no disponible', 'Carga el formato oficial antes de descargarlo.');
       return;
     }
     try {
       setIsDownloadingTemplate(true);
-      const result = await exportBlankTemplate();
-      if (result.verification?.verified === false || result.verification?.valid === false) {
-        throw new Error('La verificación de la plantilla falló.');
-      }
-      await saveAndShareTemplateExport(result);
+      await saveAndShareTemplateExport({
+        base64: sourceBase64,
+        fileName: sourceFileName || 'Mantenimiento_Preventivo_a_Sitios_Celulares.xlsx',
+        mime: MIME_XLSX,
+      });
     } catch (error) {
       Alert.alert(
         'No se pudo descargar',
@@ -154,28 +153,17 @@ export default function DashboardScreen() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.headerStatus, { backgroundColor: colors.header }]}>
         <View style={styles.statusRow}>
-          <Feather name={isOnline ? "wifi" : "wifi-off"} size={16} color={isOnline ? colors.success : colors.warning} />
+          <Feather name="smartphone" size={16} color={colors.success} />
           <Text style={[styles.statusText, { color: colors.headerForeground }]}>
-            {isOnline ? 'En línea' : 'Desconectado'}
+            {isLocalMode ? 'Modo local' : isOnline ? 'En línea' : 'Desconectado'}
           </Text>
         </View>
-        
-        {isAuthenticated ? (
-           <TouchableOpacity onPress={logout} style={styles.authBtn}>
-             <Feather name="log-out" size={14} color={colors.headerForeground} />
-             <Text style={[styles.authText, { color: colors.headerForeground }]}>Salir</Text>
-           </TouchableOpacity>
-        ) : (
-           <TouchableOpacity onPress={login} style={styles.authBtn}>
-             <Feather name="log-in" size={14} color={colors.headerForeground} />
-             <Text style={[styles.authText, { color: colors.headerForeground }]}>Iniciar Sesión</Text>
-           </TouchableOpacity>
-        )}
+        <Text style={[styles.authText, { color: colors.headerForeground }]}>Sin cuenta requerida</Text>
       </View>
       
       <View style={[styles.syncBar, { backgroundColor: colors.muted }]}>
          <Text style={[styles.syncText, { color: colors.foreground }]}>
-          {visits.filter(v => v.syncStatus === 'PENDIENTE' || v.syncStatus === 'ERROR' || v.syncStatus === 'SINCRONIZANDO').length} pendientes de envío
+          Guardado automático en este dispositivo · {visits.length} visita(s)
         </Text>
       </View>
 
@@ -316,8 +304,18 @@ export default function DashboardScreen() {
         />
         {catalog && (
           <Button
+            title="Descargar formato oficial"
+            variant="outline"
+            icon={<Feather name="download" size={17} color={colors.foreground} />}
+            onPress={() => void handleDownloadBlankTemplate()}
+            loading={isDownloadingTemplate}
+            disabled={isDownloadingTemplate || !sourceBase64}
+          />
+        )}
+        {catalog && (
+          <Button
             testID="btn-start-visit"
-            title={Platform.OS === 'web' ? 'Iniciar visita de prueba' : 'Nueva visita'}
+            title="Nueva visita"
             icon={<Feather name="plus" size={20} color="#FFF" />}
             onPress={handleStartVisit}
             size="lg"

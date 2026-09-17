@@ -4,7 +4,8 @@
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
-    "dev": "sh -c 'if [ -n \"${REPLIT_EXPO_SESSION_SECRET:-}\" ]; then pnpm exec create-launch login --session \"$REPLIT_EXPO_SESSION_SECRET\" || true; fi; if [ -z \"${PORT:-}\" ]; then echo \"PORT must be set by the Replit workflow\" >&2; exit 1; fi; EXPO_PACKAGER_PROXY_URL=\"https://$REPLIT_EXPO_DEV_DOMAIN\" EXPO_PUBLIC_DOMAIN=\"$REPLIT_DEV_DOMAIN\" EXPO_PUBLIC_REPL_ID=\"$REPL_ID\" REACT_NATIVE_PACKAGER_HOSTNAME=\"$REPLIT_DEV_DOMAIN\" METRO_PORT=\"$PORT\" pnpm exec expo start --localhost --port \"$PORT\"'",
+    "dev": "expo start --web --localhost --port 8081",
+    "dev:replit": "sh -c 'if [ -n \"${REPLIT_EXPO_SESSION_SECRET:-}\" ]; then pnpm exec create-launch login --session \"$REPLIT_EXPO_SESSION_SECRET\" || true; fi; if [ -z \"${PORT:-}\" ]; then echo \"PORT must be set by the Replit workflow\" >&2; exit 1; fi; EXPO_PACKAGER_PROXY_URL=\"https://$REPLIT_EXPO_DEV_DOMAIN\" EXPO_PUBLIC_DOMAIN=\"$REPLIT_DEV_DOMAIN\" EXPO_PUBLIC_REPL_ID=\"$REPL_ID\" EXPO_PUBLIC_AUTH_MODE=\"replit\" REACT_NATIVE_PACKAGER_HOSTNAME=\"$REPLIT_DEV_DOMAIN\" METRO_PORT=\"$PORT\" pnpm exec expo start --localhost --port \"$PORT\"'",
     "build": "node scripts/build.js",
     "serve": "node server/serve.js",
     "verify:web": "node scripts/verify-web.js",

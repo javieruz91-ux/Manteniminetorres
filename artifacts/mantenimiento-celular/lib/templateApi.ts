@@ -17,6 +17,7 @@ export {
   type TemplateMappingDraft,
 } from '../utils/templateValidation';
 import { buildTemplateMappingsPatch } from '../utils/templateValidation';
+import { getApiBaseUrl } from './runtimeConfig';
 
 const MIME_XLSX =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -70,9 +71,7 @@ export interface LocalTemplateExportInput {
 }
 
 function baseUrl(): string {
-  return process.env.EXPO_PUBLIC_DOMAIN
-    ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
-    : '';
+  return getApiBaseUrl();
 }
 
 async function authHeaders(): Promise<Record<string, string>> {

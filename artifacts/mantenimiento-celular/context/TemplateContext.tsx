@@ -23,6 +23,7 @@ import {
   CURRENT_CATALOG_SCHEMA_VERSION,
   type TemplateCatalog,
 } from '@/types';
+import { getApiBaseUrl } from '@/lib/runtimeConfig';
 
 const cacheKey = (ownerId: string) => `@mantenimiento_template_${ownerId}`;
 const LOCAL_CATALOG_KEY = '@mantenimiento_template_local';
@@ -128,9 +129,7 @@ export function TemplateProvider({ children }: { children: ReactNode }) {
       if (Platform.OS === 'web') {
         let fileName = 'Mantenimiento_Preventivo_a_Sitios_Celulares.xlsx';
         let contentBase64: string | null = null;
-        const apiBase = process.env.EXPO_PUBLIC_DOMAIN
-          ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
-          : '';
+        const apiBase = getApiBaseUrl();
         try {
           const trialResponse = await fetch(`${apiBase}/api/templates/trial-local`, {
             cache: 'no-store',
