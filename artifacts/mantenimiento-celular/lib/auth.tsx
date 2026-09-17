@@ -9,6 +9,7 @@ import React, {
 import * as AuthSession from 'expo-auth-session';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
+import { getApiBaseUrl, isRemoteAuthEnabled } from './runtimeConfig';
 
 const setToken = async (val: string) => {
   if (Platform.OS === 'web') {
@@ -65,18 +66,11 @@ const AuthContext = createContext<AuthContextValue>({
   logout: async () => {},
 });
 
-function getApiBaseUrl(): string {
-  if (process.env.EXPO_PUBLIC_DOMAIN) {
-    return `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
-  }
-  return '';
-}
-
 function getClientId(): string {
   return process.env.EXPO_PUBLIC_REPL_ID || '';
 }
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+function RemoteAuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -211,6 +205,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       {children}
     </AuthContext.Provider>
   );
+}
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  if (!isRemoteAuthEnabled()) {
+    return (
+      <AuthContext.Provider
+        value={{
+          user: null,
+          isLoading: false,
+          isAuthenticated: false,
+          login: async () => {},
+          logout: async () => {},
+        }}
+      >
+        {children}
+      </AuthContext.Provider>
+    );
+  }
+
+  return <RemoteAuthProvider>{children}</RemoteAuthProvider>;
 }
 
 export function useAuth(): AuthContextValue {

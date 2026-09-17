@@ -28,6 +28,7 @@ import {
   type LegacyVisit,
 } from '../utils/maintenanceRules';
 import { createDemoCatalog } from '@/lib/demoTemplate';
+import { getApiBaseUrl } from '@/lib/runtimeConfig';
 
 interface VisitContextValue {
   visits: Visit[];
@@ -220,15 +221,15 @@ export function VisitProvider({ children }: { children: ReactNode }) {
     try {
       const serverVisits = await listVisits();
       const token = Platform.OS === 'web' ? localStorage.getItem('auth_session_token') : await SecureStore.getItemAsync('auth_session_token');
-      const domain = process.env.EXPO_PUBLIC_DOMAIN;
+      const apiBaseUrl = getApiBaseUrl();
       const remoteUris: Record<string, string> = {};
 
-      if (token && domain) {
+      if (token && apiBaseUrl) {
         for (const sv of serverVisits) {
           for (const photo of sv.photos) {
             if (!photo.objectPath) continue;
             const safePath = photo.objectPath.startsWith('/') ? photo.objectPath : `/${photo.objectPath}`;
-            const url = `https://${domain}/api/storage${safePath}`;
+            const url = `${apiBaseUrl}/api/storage${safePath}`;
             
             if (Platform.OS === 'web') {
               try {

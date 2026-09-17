@@ -15,7 +15,6 @@ import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { Input } from '@/components/Input';
 import { useColors } from '@/hooks/useColors';
-import { useAuth } from '@/lib/auth';
 import { useTemplate } from '@/context/TemplateContext';
 import { MIME_XLSX, type TemplateMapping, validateTemplateMappings } from '@/lib/templateApi';
 import type { TemplateEvidenceSlot, TemplateFieldType } from '@/types';
@@ -74,8 +73,7 @@ type DraftMapping = TemplateMapping & { ignored: boolean };
 export default function TemplateSettingsScreen() {
   const colors = useColors();
   const router = useRouter();
-  const { isAuthenticated, login } = useAuth();
-  const { catalog, isLoading, error, upload, saveMappings } = useTemplate();
+  const { catalog, isLoading, error, uploadLocal } = useTemplate();
   const [busy, setBusy] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, DraftMapping>>({});
 
@@ -117,10 +115,6 @@ export default function TemplateSettingsScreen() {
   };
 
   const chooseFile = async () => {
-    if (!isAuthenticated) {
-      await login();
-      return;
-    }
     if (catalog) {
       Alert.alert(
         'Reemplazar plantilla original',
@@ -140,9 +134,9 @@ export default function TemplateSettingsScreen() {
     if (!selected) return;
     setBusy(true);
     try {
-      await upload({ fileName: selected.name, contentBase64: selected.base64, replace });
+      await uploadLocal({ fileName: selected.name, contentBase64: selected.base64, replace });
       setDrafts({});
-      Alert.alert('Plantilla cargada', 'El servidor analizará el libro y mostrará la auditoría.');
+      Alert.alert('Plantilla cargada', 'El motor local analizó el libro y actualizó la auditoría.');
     } catch (cause) {
       Alert.alert('No se pudo cargar', cause instanceof Error ? cause.message : 'Error desconocido');
     } finally {
@@ -156,37 +150,18 @@ export default function TemplateSettingsScreen() {
       Alert.alert('Mapeo incompleto', validationErrors[0].message);
       return;
     }
-    setBusy(true);
-    try {
-      await saveMappings(draftValues);
-      setDrafts({});
-      Alert.alert('Mapeos guardados', 'La auditoría fue actualizada.');
-    } catch (cause) {
-      Alert.alert('No se pudieron guardar', cause instanceof Error ? cause.message : 'Error desconocido');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (!isAuthenticated) {
-    return (
-      <View style={[styles.center, { backgroundColor: colors.background }]}>
-        <Feather name="lock" size={36} color={colors.mutedForeground} />
-        <Text style={[styles.title, { color: colors.foreground }]}>Configuración de plantilla</Text>
-        <Text style={{ color: colors.mutedForeground, textAlign: 'center' }}>
-          Inicia sesión como propietario para administrar la plantilla Excel original.
-        </Text>
-        <Button title="Iniciar sesión" onPress={login} style={styles.button} />
-      </View>
+    Alert.alert(
+      'Usa el formato oficial',
+      'La versión local no altera automáticamente formatos desconocidos. Carga el archivo oficial proporcionado para trabajar con el mapeo verificado.',
     );
-  }
+  };
 
   return (
     <ScrollView style={{ backgroundColor: colors.background }} contentContainerStyle={styles.content}>
       <Card style={styles.card}>
         <Text style={[styles.title, { color: colors.foreground }]}>Plantilla Excel original</Text>
         <Text style={[styles.explanation, { color: colors.mutedForeground }]}>
-          Esta plantilla es la única fuente del catálogo operativo. No se crean campos de ejemplo.
+          Se analiza y guarda solamente en este dispositivo. No necesitas una cuenta ni Replit.
         </Text>
         {!catalog && !isLoading && (
           <Text style={[styles.missing, { color: colors.destructive }]}>

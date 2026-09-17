@@ -10,6 +10,7 @@ out-tsc
 
 # dependencies
 node_modules
+.expo-user
 
 # IDEs and editors
 /.idea

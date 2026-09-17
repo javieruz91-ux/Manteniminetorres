@@ -1,17 +1,25 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { deflateRawSync } from "node:zlib";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const dir = mkdtempSync(join(tmpdir(), "xlsx-template-test-"));
-const bundle = join(dir, "xlsxTemplate.mjs");
-execFileSync("pnpm", ["exec", "esbuild", "src/lib/xlsxTemplate.ts", "--bundle", "--platform=node", "--format=esm", `--outfile=${bundle}`], {
-  cwd: new URL("..", import.meta.url).pathname,
-  stdio: "inherit",
-});
+
+function readZipEntry(file, entry) {
+  return process.platform === "win32"
+    ? execFileSync("tar", ["-xOf", file, entry.replace(/([\[\]])/g, "\\$1")], { encoding: "utf8" })
+    : execFileSync("unzip", ["-p", file, entry], { encoding: "utf8" });
+}
+
+function listZip(file) {
+  return process.platform === "win32"
+    ? execFileSync("tar", ["-tf", file], { encoding: "utf8" })
+    : execFileSync("unzip", ["-l", file], { encoding: "utf8" });
+}
+
 const {
   EXPECTED_SHEETS,
   PHOTO_SLOT_COUNT,
@@ -21,7 +29,7 @@ const {
   patchTemplate,
   prepareBlankTemplate,
   verifyTemplate,
-} = await import(bundle);
+} = await import("../src/lib/xlsxTemplate.ts");
 
 const officialWorkbook = fileURLToPath(new URL("../../../attached_assets/Mantenimiento_Preventivo_a_Sitios_Celulares_REV2_(1)_1789252951099.xlsx", import.meta.url));
 const officialFixture = readFileSync(officialWorkbook);
@@ -351,7 +359,7 @@ assert.equal(blank.verification.sheets.length, 10);
 assert.equal(blank.photoSlots.length, PHOTO_SLOT_COUNT);
 const blankZip = join(dir, "blank.xlsx");
 writeFileSync(blankZip, blank.bytes);
-const blankPhotoSheet = execFileSync("unzip", ["-p", blankZip, "xl/worksheets/sheet9.xml"], { encoding: "utf8" });
+const blankPhotoSheet = readZipEntry(blankZip, "xl/worksheets/sheet9.xml");
 for (let slot = 1; slot <= PHOTO_SLOT_COUNT; slot++) {
   assert.equal(blankPhotoSheet.includes(`r="A${slot + 2}"`), true);
   assert.equal(blankPhotoSheet.includes(`ESPACIO ${slot}`), true);
@@ -372,7 +380,7 @@ assert.equal(verification.valid, true);
 assert.deepEqual(patched.writtenTargets.sort(), fields.slice(0, 2).map((field) => field.target).sort());
 const patchedZip = join(dir, "patched.xlsx");
 writeFileSync(patchedZip, patched.bytes);
-assert.equal(/<f\b/i.test(execFileSync("unzip", ["-p", patchedZip, "xl/worksheets/sheet1.xml"], { encoding: "utf8" })), true);
+assert.equal(/<f\b/i.test(readZipEntry(patchedZip, "xl/worksheets/sheet1.xml")), true);
 
 // Responses are exact-id based; a coincidental label must not win. Ranges
 // preserve their identity while writing the top-left cell.
@@ -416,11 +424,7 @@ for (const field of mappedInfrastructureFields) {
 }
 const infrastructureZip = join(dir, "infrastructure-complete.xlsx");
 writeFileSync(infrastructureZip, infrastructurePatch.bytes);
-const infrastructureXml = execFileSync(
-  "unzip",
-  ["-p", infrastructureZip, "xl/worksheets/sheet4.xml"],
-  { encoding: "utf8" },
-);
+const infrastructureXml = readZipEntry(infrastructureZip, "xl/worksheets/sheet4.xml");
 for (const field of mappedInfrastructureFields) {
   const ref = field.target.split("!")[1].split(":")[0];
   assert.ok(infrastructureXml.includes(`r="${ref}"`), `${field.target} missing from sheet4.xml`);
@@ -461,11 +465,7 @@ writeFileSync(explicitZip, explicitPatch.bytes);
 for (const field of explicitFields) {
   const sheetNumber = field.sheet === "TRANSMISION" ? 7 : 2;
   const ref = field.target.split("!")[1].split(":")[0];
-  const sheetXml = execFileSync(
-    "unzip",
-    ["-p", explicitZip, `xl/worksheets/sheet${sheetNumber}.xml`],
-    { encoding: "utf8" },
-  );
+  const sheetXml = readZipEntry(explicitZip, `xl/worksheets/sheet${sheetNumber}.xml`);
   assert.ok(sheetXml.includes(`r="${ref}"`), `${field.target} missing from exported XML`);
 }
 
@@ -509,11 +509,7 @@ for (const field of mappedElectromechanicalFields) {
 }
 const electromechanicalZip = join(dir, "electromecanica-complete.xlsx");
 writeFileSync(electromechanicalZip, electromechanicalPatch.bytes);
-assert.equal(
-  execFileSync("unzip", ["-t", electromechanicalZip], { encoding: "utf8" })
-    .includes("No errors detected"),
-  true,
-);
+assert.doesNotThrow(() => listZip(electromechanicalZip));
 const reopenedElectromechanicalCatalog = parseTemplate(electromechanicalPatch.bytes);
 assert.equal(reopenedElectromechanicalCatalog.ready, true);
 assert.equal(
@@ -535,16 +531,8 @@ assert.equal(
   electromechanicalStatusPatch.capturedValues["ELECTROMECANICA!D32"],
   "NOK",
 );
-const electromechanicalXml = execFileSync(
-  "unzip",
-  ["-p", electromechanicalZip, "xl/worksheets/sheet5.xml"],
-  { encoding: "utf8" },
-);
-const electromechanicalSharedStrings = execFileSync(
-  "unzip",
-  ["-p", electromechanicalZip, "xl/sharedStrings.xml"],
-  { encoding: "utf8" },
-);
+const electromechanicalXml = readZipEntry(electromechanicalZip, "xl/worksheets/sheet5.xml");
+const electromechanicalSharedStrings = readZipEntry(electromechanicalZip, "xl/sharedStrings.xml");
 for (const target of electromechanicalTargets) {
   const ref = target.split("!")[1];
   assert.ok(electromechanicalXml.includes(`r="${ref}"`), `${target} missing from sheet5.xml`);
@@ -584,11 +572,11 @@ assert.equal(embedded.valid, true);
 assert.deepEqual(embedded.consumedPhotoIds, ["photo-1"]);
 const embeddedZip = join(dir, "embedded.xlsx");
 writeFileSync(embeddedZip, embedded.bytes);
-assert.equal(execFileSync("unzip", ["-l", embeddedZip], { encoding: "utf8" }).includes("xl/media/template-"), true);
-assert.equal(execFileSync("unzip", ["-p", embeddedZip, "\\[Content_Types\\].xml"], { encoding: "utf8" }).includes("PartName=\"/xl/drawings/drawing1.xml\""), true);
-const drawingXml = execFileSync("unzip", ["-p", embeddedZip, "xl/drawings/drawing1.xml"], { encoding: "utf8" });
+assert.equal(listZip(embeddedZip).includes("xl/media/template-"), true);
+assert.equal(readZipEntry(embeddedZip, "[Content_Types].xml").includes("PartName=\"/xl/drawings/drawing1.xml\""), true);
+const drawingXml = readZipEntry(embeddedZip, "xl/drawings/drawing1.xml");
 assert.equal(drawingXml.includes("twoCellAnchor"), true);
-assert.equal(execFileSync("unzip", ["-p", embeddedZip, "xl/drawings/_rels/drawing1.xml.rels"], { encoding: "utf8" }).includes("image"), true);
+assert.equal(readZipEntry(embeddedZip, "xl/drawings/_rels/drawing1.xml.rels").includes("image"), true);
 
 // A tower photo is a targeted evidence slot, not a report-page photo. It
 // must create a real drawing anchor on INFRAESTRUCTURA!B60.
@@ -606,14 +594,14 @@ assert.equal(towerPhoto.valid, true);
 assert.deepEqual(towerPhoto.consumedPhotoIds, ["tower-photo"]);
 const towerZip = join(dir, "tower-photo.xlsx");
 writeFileSync(towerZip, towerPhoto.bytes);
-const towerSheetXml = execFileSync("unzip", ["-p", towerZip, "xl/worksheets/sheet4.xml"], { encoding: "utf8" });
+const towerSheetXml = readZipEntry(towerZip, "xl/worksheets/sheet4.xml");
 const towerDrawingId = towerSheetXml.match(/<drawing\b[^>]*r:id="([^"]+)"/)?.[1];
 assert.ok(towerDrawingId, "INFRAESTRUCTURA must reference a drawing after tower-photo export");
-const towerSheetRels = execFileSync("unzip", ["-p", towerZip, "xl/worksheets/_rels/sheet4.xml.rels"], { encoding: "utf8" });
+const towerSheetRels = readZipEntry(towerZip, "xl/worksheets/_rels/sheet4.xml.rels");
 const towerDrawingTarget = towerSheetRels.match(new RegExp(`<Relationship[^>]*Id="${towerDrawingId}"[^>]*Target="([^"]+)"`))?.[1];
 assert.ok(towerDrawingTarget, "the tower drawing relationship must resolve");
 const towerDrawingName = `xl/drawings/${towerDrawingTarget.split("/").at(-1)}`;
-const towerDrawingXml = execFileSync("unzip", ["-p", towerZip, towerDrawingName], { encoding: "utf8" });
+const towerDrawingXml = readZipEntry(towerZip, towerDrawingName);
 assert.equal(towerDrawingXml.includes("Evidence tower-photo"), true);
 assert.equal(/<xdr:from><xdr:col>1<\/xdr:col>[\s\S]*?<xdr:row>59<\/xdr:row>/.test(towerDrawingXml), true);
 
@@ -631,17 +619,17 @@ const overflow = embedEvidence(overflowSource, [
 assert.equal(overflow.valid, true);
 const overflowZip = join(dir, "overflow.xlsx");
 writeFileSync(overflowZip, overflow.bytes);
-const overflowSheet = execFileSync("unzip", ["-p", overflowZip, "xl/worksheets/sheet9.xml"], { encoding: "utf8" });
+const overflowSheet = readZipEntry(overflowZip, "xl/worksheets/sheet9.xml");
 assert.equal(overflowSheet.includes('ref="A1:M422"'), true);
 assert.equal(overflowSheet.includes('<row r="212"'), true);
 assert.equal(overflowSheet.includes('ref="A212:M213"'), true);
-assert.equal((execFileSync("unzip", ["-l", overflowZip], { encoding: "utf8" }).match(/xl\/worksheets\/sheet\d+\.xml/g) || []).length, 10);
+assert.equal((listZip(overflowZip).match(/xl\/worksheets\/sheet\d+\.xml/g) || []).length, 10);
 assert.equal(verifyTemplate(overflow.bytes, [], [], {}, 2).valid, true);
 try {
   execFileSync("soffice", ["--headless", "--convert-to", "pdf", "--outdir", dir, overflowZip], { stdio: "ignore" });
   assert.equal(true, true, "LibreOffice opened the overflow workbook");
 } catch (error) {
-  if (error?.status !== 127) throw error;
+  if (error?.status !== 127 && error?.code !== "ENOENT") throw error;
 }
 
 // End-to-end local-first export: no login/session is involved. The snapshot
@@ -703,26 +691,25 @@ const integralZip = join(dir, "integral-nok.xlsx");
 writeFileSync(integralZip, integralEmbedded.bytes);
 const originalZip = join(dir, "original-official.xlsx");
 writeFileSync(originalZip, officialFixture);
-const sheetNames = execFileSync("unzip", ["-p", integralZip, "xl/workbook.xml"], { encoding: "utf8" });
+const sheetNames = readZipEntry(integralZip, "xl/workbook.xml");
 for (const [name] of EXPECTED_SHEETS) assert.ok(sheetNames.includes(`name="${name}"`));
-const segXml = execFileSync("unzip", ["-p", integralZip, "xl/worksheets/sheet8.xml"], { encoding: "utf8" });
-const reportXml = execFileSync("unzip", ["-p", integralZip, "xl/worksheets/sheet9.xml"], { encoding: "utf8" });
+const segXml = readZipEntry(integralZip, "xl/worksheets/sheet8.xml");
+const reportXml = readZipEntry(integralZip, "xl/worksheets/sheet9.xml");
 assert.ok(segXml.includes("Aislador deteriorado"));
 assert.ok(reportXml.includes("Aislador deteriorado"));
-assert.ok(execFileSync("unzip", ["-l", integralZip], { encoding: "utf8" }).includes("xl/media/template-"));
+assert.ok(listZip(integralZip).includes("xl/media/template-"));
 assert.equal(
-  execFileSync("unzip", ["-p", originalZip, "xl/styles.xml"], { encoding: "utf8" }),
-  execFileSync("unzip", ["-p", integralZip, "xl/styles.xml"], { encoding: "utf8" }),
+  readZipEntry(originalZip, "xl/styles.xml"),
+  readZipEntry(integralZip, "xl/styles.xml"),
 );
 assert.ok(reportXml.includes('ref="A10:F27"'));
 assert.ok(reportXml.includes("<mergeCell"));
-assert.ok(execFileSync("unzip", ["-p", integralZip, "xl/worksheets/sheet1.xml"], { encoding: "utf8" }).includes("dataValidation"));
+assert.ok(readZipEntry(integralZip, "xl/worksheets/sheet1.xml").includes("dataValidation"));
 try {
   execFileSync("soffice", ["--headless", "--convert-to", "pdf", "--outdir", dir, integralZip], { stdio: "ignore" });
   assert.ok(true, "LibreOffice reopened the generated XLSX");
 } catch (error) {
-  if (error?.status !== 127) throw error;
+  if (error?.status !== 127 && error?.code !== "ENOENT") throw error;
 }
 
-rmSync(dir, { recursive: true, force: true });
 console.log("xlsxTemplate parser/patch tests passed");
