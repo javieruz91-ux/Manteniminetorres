@@ -130,7 +130,7 @@ export interface VisitFinding {
   responsible: string;
   priority: VisitFindingPriority;
   startDate: string;
-  commitmentDate: string;
+  commitmentDate: string | null;
   /** @nullable */
   completedDate: string | null;
   state: VisitFindingState;

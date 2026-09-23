@@ -175,7 +175,7 @@ export const SyncVisitBody = zod.object({
   "responsible": zod.string(),
   "priority": zod.enum(['BAJA', 'MEDIA', 'ALTA', 'CRITICA']),
   "startDate": zod.coerce.date(),
-  "commitmentDate": zod.coerce.date(),
+  "commitmentDate": zod.coerce.date().nullable(),
   "completedDate": zod.coerce.date().nullable(),
   "state": zod.enum(['ABIERTO', 'CORREGIDO']),
   "metadata": zod.record(zod.string(), zod.unknown()).optional()
@@ -295,7 +295,7 @@ export const ListVisitsResponseItem = zod.object({
   "responsible": zod.string(),
   "priority": zod.enum(['BAJA', 'MEDIA', 'ALTA', 'CRITICA']),
   "startDate": zod.coerce.date(),
-  "commitmentDate": zod.coerce.date(),
+  "commitmentDate": zod.coerce.date().nullable(),
   "completedDate": zod.coerce.date().nullable(),
   "state": zod.enum(['ABIERTO', 'CORREGIDO']),
   "metadata": zod.record(zod.string(), zod.unknown()).optional()
@@ -411,7 +411,7 @@ export const GetVisitResponse = zod.object({
   "responsible": zod.string(),
   "priority": zod.enum(['BAJA', 'MEDIA', 'ALTA', 'CRITICA']),
   "startDate": zod.coerce.date(),
-  "commitmentDate": zod.coerce.date(),
+  "commitmentDate": zod.coerce.date().nullable(),
   "completedDate": zod.coerce.date().nullable(),
   "state": zod.enum(['ABIERTO', 'CORREGIDO']),
   "metadata": zod.record(zod.string(), zod.unknown()).optional()

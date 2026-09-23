@@ -20,7 +20,8 @@ export interface VisitFinding {
   responsible: string;
   priority: VisitFindingPriority;
   startDate: Date;
-  commitmentDate: Date;
+  /** @nullable */
+  commitmentDate: Date | null;
   /** @nullable */
   completedDate: Date | null;
   state: VisitFindingState;

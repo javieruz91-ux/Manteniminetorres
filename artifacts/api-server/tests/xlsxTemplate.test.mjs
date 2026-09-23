@@ -29,6 +29,10 @@ const {
   patchTemplate,
   prepareBlankTemplate,
   verifyTemplate,
+  getPhotoSlotCount,
+  splitProviders,
+  providerSnapshot,
+  followUpPdfWorkbook,
 } = await import("../src/lib/xlsxTemplate.ts");
 
 const officialWorkbook = fileURLToPath(new URL("../../../attached_assets/Mantenimiento_Preventivo_a_Sitios_Celulares_REV2_(1)_1789252951099.xlsx", import.meta.url));
@@ -713,3 +717,37 @@ try {
 }
 
 console.log("xlsxTemplate parser/patch tests passed");
+
+const region8File = fileURLToPath(new URL("../../../attached_assets/plantilla_region8_limpia.xlsx", import.meta.url));
+const region8Fixture = readFileSync(region8File);
+const region8Catalog = parseTemplate(region8Fixture);
+assert.equal(region8Catalog.ready, true);
+assert.equal(getPhotoSlotCount(region8Fixture), 20);
+assert.equal(region8Catalog.questions.length, 263);
+assert.deepEqual(splitProviders("Proveedor A, Proveedor B; proveedor a"), ["Proveedor A", "Proveedor B"]);
+const sharedSnapshot = {
+  sections: [{ id: "s", name: "TIERRAS", title: "PARARAYOS", points: [] }],
+  findings: [
+    { id: "one", pointId: "additional:one", sectionId: "s", responsible: "Proveedor A, Proveedor B", description: "Daño compartido", photos: [] },
+    { id: "two", pointId: "additional:two", sectionId: "s", responsible: "Proveedor B", description: "Solo B", photos: [] },
+  ],
+};
+const providerA = providerSnapshot(sharedSnapshot, "Proveedor A");
+const providerB = providerSnapshot(sharedSnapshot, "Proveedor B");
+assert.equal(providerA.findings.length, 1);
+assert.equal(providerB.findings.length, 2);
+const regionalPatched = patchTemplate(region8Fixture, providerA, []);
+assert.equal(regionalPatched.capturedValues["HOJA DE SEG!B7"], "TIERRAS · PARARAYOS");
+assert.equal(regionalPatched.capturedValues["HOJA DE SEG!C7"], "Hallazgo adicional");
+assert.equal(regionalPatched.capturedValues["HOJA DE SEG!D7"], "Proveedor A");
+assert.equal(verifyTemplate(regionalPatched.bytes, [], regionalPatched.writtenTargets, regionalPatched.capturedValues).valid, true);
+const regionalPath = join(dir, "region8-provider.xlsx");
+writeFileSync(regionalPath, regionalPatched.bytes);
+assert.match(readZipEntry(regionalPath, "xl/worksheets/sheet8.xml"), /<row[^>]*r="7"[^>]*ht="48"/);
+const providerPdfBook = followUpPdfWorkbook(regionalPatched.bytes);
+const pdfBookPath = join(dir, "provider.pdf-source.xlsx");
+writeFileSync(pdfBookPath, providerPdfBook);
+const pdfWorkbookXml = readZipEntry(pdfBookPath, "xl/workbook.xml");
+assert.match(pdfWorkbookXml, /name="HOJA DE SEG"[^>]*state="visible"/);
+assert.match(pdfWorkbookXml, /name="REPORTE FOTOGRAFICO"[^>]*state="visible"/);
+assert.match(pdfWorkbookXml, /name="PRESENTACION"[^>]*state="hidden"/);

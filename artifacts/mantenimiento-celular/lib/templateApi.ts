@@ -64,7 +64,8 @@ export interface TemplateExportResult {
 export interface LocalTemplateExportInput {
   fileName: string;
   contentBase64: string;
-  format: 'xlsx' | 'pdf';
+    format: 'xlsx' | 'pdf';
+    provider?: string;
   snapshot: unknown;
   fields: unknown[];
   photos?: Array<{ id: string; contentBase64: string; contentType?: string; target?: string }>;

@@ -79,9 +79,14 @@ export function TemplateProvider({ children }: { children: ReactNode }) {
     try {
       if (isAuthenticated && user?.id) {
         const remote = await getTemplate();
+        const localSource = await AsyncStorage.getItem(LOCAL_SOURCE_KEY);
+        let region8Active = false;
+        try { region8Active = JSON.parse(localSource || 'null')?.fileName === 'plantilla_region8_limpia.xlsx'; }
+        catch { /* A damaged cache can still be replaced by the remote template. */ }
         if (
           remote &&
-          remote.descriptor.schemaVersion >= CURRENT_CATALOG_SCHEMA_VERSION
+          remote.descriptor.schemaVersion >= CURRENT_CATALOG_SCHEMA_VERSION &&
+          !region8Active
         ) {
           await persist(remote);
         }

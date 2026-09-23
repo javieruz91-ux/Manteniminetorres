@@ -9,7 +9,6 @@ import { PhotoPicker } from '@/components/PhotoPicker';
 import { FindingPriority, FindingState, Photo } from '@/types';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import * as Haptics from 'expo-haptics';
-import * as Crypto from 'expo-crypto';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -50,8 +49,8 @@ export default function FindingModalScreen() {
   const handleSave = async () => {
     if (isReadOnly) return;
     
-    if (!description.trim() || !responsible.trim() || !commitmentDate) {
-      Alert.alert('Datos incompletos', 'Completa la descripción, responsable y fecha compromiso.');
+    if (!description.trim() || !responsible.trim()) {
+      Alert.alert('Datos incompletos', 'Completa la descripción y los proveedores responsables.');
       return;
     }
 
@@ -204,19 +203,19 @@ export default function FindingModalScreen() {
 
           <Input 
             testID="finding-responsible"
-            label="Responsable de corregir" 
+            label="Proveedores responsables (separados por coma)"
             value={responsible}
             onChangeText={value => {
               setResponsible(value);
               persistDraft({ responsible: value });
             }}
-            placeholder="Nombre o rol"
+            placeholder="Ej. TELCEL, TELESITE"
             editable={!isReadOnly}
           />
 
           <Input 
             testID="finding-commitment-date"
-            label={state === 'CORREGIDO' ? "Fecha de corrección (YYYY-MM-DD)" : "Fecha compromiso (YYYY-MM-DD)"} 
+            label="Fecha compromiso (opcional, YYYY-MM-DD)"
             value={commitmentDate}
             onChangeText={value => {
               setCommitmentDate(value);

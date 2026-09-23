@@ -2,7 +2,6 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useRe
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import * as FileSystem from 'expo-file-system/legacy';
-import * as Crypto from 'expo-crypto';
 import { AppState } from 'react-native';
 import { Visit, Section, ChecklistStatus, Finding, Photo, AuditEvent, PhotoType, UploadStatus, VisitSnapshotLifecycleStatus, VisitSnapshotSyncStatus, FindingPriority, FindingState, CURRENT_CATALOG_SCHEMA_VERSION } from '../types';
 import { syncVisit, requestUploadUrl, listVisits } from '@workspace/api-client-react';
@@ -29,6 +28,7 @@ import {
 } from '../utils/maintenanceRules';
 import { createDemoCatalog } from '@/lib/demoTemplate';
 import { getApiBaseUrl } from '@/lib/runtimeConfig';
+import { createUuid } from '@/lib/uuid';
 
 interface VisitContextValue {
   visits: Visit[];
@@ -464,7 +464,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
                         mutateVisits(prev => {
                           const adopted = guestVisits.map(v => ({ 
                             ...v, 
-                            operationId: Crypto.randomUUID(),
+                            operationId: createUuid(),
                             syncStatus: 'PENDIENTE' as const
                           }));
                           return [...prev, ...adopted];
@@ -519,7 +519,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
         : undefined,
        templateFields: activeCatalogFields,
     }, {
-      id: () => Crypto.randomUUID(),
+      id: createUuid,
       now: () => new Date().toISOString(),
     });
     newVisit.demoOnly = isDemoMode;
@@ -556,7 +556,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
         templateFields: demo.fields,
       },
       {
-        id: () => Crypto.randomUUID(),
+        id: createUuid,
         now: () => new Date().toISOString(),
       },
     );
@@ -581,7 +581,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
             ...safeData, 
             clientUpdatedAt: new Date().toISOString() 
           };
-          nextData.operationId = Crypto.randomUUID();
+          nextData.operationId = createUuid();
           nextData.syncStatus = 'PENDIENTE';
           return nextData as Visit;
         }
@@ -611,7 +611,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
                 ...getVisitConvenienceFields(responseUpdatedVisit, fieldsForVisit(v)),
                 responses,
                 clientUpdatedAt: new Date().toISOString(),
-                operationId: Crypto.randomUUID(),
+                operationId: createUuid(),
                 syncStatus: 'PENDIENTE' as const,
               };
             })()
@@ -638,7 +638,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
               finding.pointId === pointId ? { ...finding, ...patch } : finding,
             ),
             clientUpdatedAt: new Date().toISOString(),
-            operationId: Crypto.randomUUID(),
+            operationId: createUuid(),
             syncStatus: 'PENDIENTE' as const,
           }
         : v);
@@ -654,7 +654,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       const existing = prev.find(v => v.id === id);
       if (!existing) throw new Error("Visita no encontrada");
       const closed = closeVisitRules(existing, auditEvent, {
-        id: () => Crypto.randomUUID(),
+        id: createUuid,
         now: () => new Date().toISOString(),
       }, fieldsForVisit(existing));
       return prev.map(v => v.id === id ? closed : v);
@@ -666,7 +666,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       const existing = prev.find(v => v.id === id);
       if (!existing) throw new Error("Visita no encontrada");
       const reopened = reopenVisitRules(existing, auditEvent, {
-        id: () => Crypto.randomUUID(),
+        id: createUuid,
         now: () => new Date().toISOString(),
       });
       return prev.map(v => v.id === id ? reopened : v);
@@ -692,7 +692,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       const existing = prev.find(v => v.id === visitId);
       if (!existing) throw new Error("Visita no encontrada");
       const updated = setPointStatus(existing, sectionId, pointId, status, {
-        id: () => Crypto.randomUUID(),
+        id: createUuid,
         now: () => new Date().toISOString(),
       });
       return prev.map(v => v.id === visitId ? updated : v);
@@ -704,7 +704,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
       const existing = prev.find(v => v.id === visitId);
       if (!existing) throw new Error("Visita no encontrada");
       const updated = saveFindingAndStatusRules(existing, sectionId, pointId, status, finding, {
-        id: () => Crypto.randomUUID(),
+        id: createUuid,
         now: () => new Date().toISOString(),
       });
       return prev.map(v => v.id === visitId ? updated : v);
@@ -719,7 +719,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
     if (Platform.OS === 'web') return tempUri;
     
     const ext = tempUri.split('.').pop() || 'jpg';
-    const newName = `${visitId}_${Crypto.randomUUID()}.${ext}`;
+    const newName = `${visitId}_${createUuid()}.${ext}`;
     const dest = `${FileSystem.documentDirectory}${newName}`;
     
     await FileSystem.copyAsync({ from: tempUri, to: dest });
@@ -1085,7 +1085,7 @@ export function VisitProvider({ children }: { children: ReactNode }) {
                   responsible: f.responsible,
                   priority: f.priority as VisitFindingPriority,
                   startDate: f.startDate,
-                  commitmentDate: f.commitmentDate,
+                  commitmentDate: f.commitmentDate || null,
                   completedDate: f.completedDate,
                 })),
               };
@@ -1320,6 +1320,12 @@ function mapSnapshotToLocal(
       ...section,
       status: (sv.sections.find(candidate => candidate.id === section.id)?.status ??
         section.status) as ChecklistStatus,
+      points: [
+        ...section.points,
+        ...(sv.sections.find(candidate => candidate.id === section.id)?.points ?? [])
+          .filter(point => point.id.startsWith('additional:'))
+          .map(point => ({ id: point.id, title: point.title, status: point.status as ChecklistStatus })),
+      ],
     })),
     template: remoteTemplate
       ? {
@@ -1338,13 +1344,13 @@ function mapSnapshotToLocal(
       actorId: a.actorId || undefined,
       metadata: a.metadata,
     })),
-    operationId: Crypto.randomUUID(),
+    operationId: createUuid(),
     syncAttemptCount: 0
   };
 }
 
-function normalizeDateOnly(value: string): string {
-  return value.includes('T') ? value.slice(0, 10) : value;
+function normalizeDateOnly(value: string | null): string {
+  return !value ? '' : value.includes('T') ? value.slice(0, 10) : value;
 }
 
 function normalizeWireTemplateField(field: any): TemplateField {

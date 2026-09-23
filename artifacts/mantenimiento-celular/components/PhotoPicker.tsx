@@ -4,7 +4,7 @@ import { useColors } from '@/hooks/useColors';
 import * as ImagePicker from 'expo-image-picker';
 import { Photo, PhotoType } from '@/types';
 import { Feather } from '@expo/vector-icons';
-import * as Crypto from 'expo-crypto';
+import { createUuid } from '@/lib/uuid';
 
 interface PhotoPickerProps {
   photos: Photo[];
@@ -54,7 +54,7 @@ export function PhotoPicker({ photos, onAdd, onRemove, type, label, disabled = f
 
     if (result && !result.canceled && result.assets[0]) {
       onAdd({
-        id: Crypto.randomUUID(),
+        id: createUuid(),
         uri: result.assets[0].uri,
         type,
         timestamp: Date.now(),

@@ -593,7 +593,7 @@ components:
           type: string
           enum: [BAJA, MEDIA, ALTA, CRITICA]
         startDate: { type: string, format: date-time }
-        commitmentDate: { type: string, format: date-time }
+        commitmentDate: { type: ["string", "null"], format: date-time }
         completedDate: { type: ["string", "null"], format: date-time }
         state:
           type: string
@@ -841,4 +841,3 @@ components:
             sheets: { type: array, items: { type: string } }
             writtenTargets: { type: array, items: { type: string } }
             details: { type: array, items: { type: string } }
-
