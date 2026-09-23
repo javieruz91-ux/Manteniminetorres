@@ -93,7 +93,8 @@ export function Button({
           backgroundColor: getBackgroundColor(),
           borderColor: getBorderColor(),
           borderWidth: variant === 'outline' ? 1 : 0,
-          height: getHeight(),
+          minHeight: getHeight(),
+          paddingVertical: size === 'sm' ? 6 : 10,
           borderRadius: colors.radius,
         },
         style
@@ -130,8 +131,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 16,
+    paddingVertical: 10,
+    minWidth: 0,
   },
   text: {
     textAlign: 'center',
+    flexShrink: 1,
+    lineHeight: 20,
   },
 });

@@ -276,12 +276,16 @@ export default function DashboardScreen() {
         }}
       />
 
-      <View style={[styles.footer, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: Math.max(insets.bottom, 16) }]}>
+      <View style={[styles.footer, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: Math.max(insets.bottom, 12) }]}>
+        <View style={styles.footerActions}>
         {!catalog && (
           <Button
             testID="btn-load-template"
-            title="Cargar mi formato Excel"
-            icon={<Feather name="upload" size={17} color="#FFF" />}
+            title="Cargar formato"
+            size="sm"
+            variant="outline"
+            style={styles.footerAction}
+            icon={<Feather name="upload" size={15} color={colors.foreground} />}
             onPress={() => void handleLoadTemplate()}
             loading={isImportingTemplate}
             disabled={isImportingTemplate}
@@ -290,28 +294,35 @@ export default function DashboardScreen() {
         {!catalog && (
           <Button
             testID="btn-demo-visit"
-            title="Probar con datos de ejemplo"
+            title="Ver ejemplo"
+            size="sm"
             variant="outline"
-            icon={<Feather name="play-circle" size={17} color={colors.foreground} />}
+            style={styles.footerAction}
+            icon={<Feather name="play-circle" size={15} color={colors.foreground} />}
             onPress={() => void handleResetDemo()}
           />
         )}
         <Button
-          title="Administración de plantilla"
-          variant="ghost"
-          icon={<Feather name="settings" size={17} color={colors.primary} />}
+          title="Plantilla"
+          size="sm"
+          variant="outline"
+          style={styles.footerAction}
+          icon={<Feather name="settings" size={15} color={colors.foreground} />}
           onPress={() => router.push('/settings/template')}
         />
         {catalog && (
           <Button
             title="Descargar formato oficial"
+            size="sm"
             variant="outline"
-            icon={<Feather name="download" size={17} color={colors.foreground} />}
+            style={styles.footerAction}
+            icon={<Feather name="download" size={15} color={colors.foreground} />}
             onPress={() => void handleDownloadBlankTemplate()}
             loading={isDownloadingTemplate}
             disabled={isDownloadingTemplate || !sourceBase64}
           />
         )}
+        </View>
         {catalog && (
           <Button
             testID="btn-start-visit"
@@ -485,5 +496,13 @@ const styles = StyleSheet.create({
     right: 0,
     padding: 16,
     borderTopWidth: 1,
-  }
+    gap: 10,
+  },
+  footerActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  footerAction: {
+    flex: 1,
+  },
 });

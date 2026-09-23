@@ -393,14 +393,14 @@ export default function SummaryScreen() {
             
             <View style={{ gap: 12 }}>
               <Button 
-                title="Descargar Reporte Excel"
+                title="Reporte general · Excel"
                 variant="outline"
                 icon={<Feather name="download" size={18} color={colors.foreground} />}
                  onPress={() => void handleDownload('xlsx')}
                 disabled={isGenerating}
               />
               <Button 
-                title="Descargar Reporte Fotográfico (PDF)"
+                title="Reporte general · PDF"
                 variant="outline"
                 icon={<Feather name="file-text" size={18} color={colors.foreground} />}
                  onPress={() => void handleDownload('pdf')}
@@ -408,22 +408,31 @@ export default function SummaryScreen() {
                 loading={isGenerating}
               />
               {providers.map(provider => (
-                <Button
-                  key={provider}
-                  title={`Reporte para ${provider} (Excel)`}
-                  variant="outline"
-                  onPress={() => void handleDownload('xlsx', provider)}
-                  disabled={isGenerating}
-                />
-              ))}
-              {providers.map(provider => (
-                <Button
-                  key={`${provider}-pdf`}
-                  title={`Reporte para ${provider} (PDF)`}
-                  variant="outline"
-                  onPress={() => void handleDownload('pdf', provider)}
-                  disabled={isGenerating}
-                />
+                <View key={provider} style={[styles.providerDownloads, { borderColor: colors.border }]}>
+                  <Text style={[styles.providerName, { color: colors.foreground }]} numberOfLines={2}>
+                    {provider}
+                  </Text>
+                  <View style={styles.providerButtons}>
+                    <Button
+                      title="Excel"
+                      size="sm"
+                      variant="outline"
+                      style={{ flex: 1 }}
+                      icon={<Feather name="download" size={15} color={colors.foreground} />}
+                      onPress={() => void handleDownload('xlsx', provider)}
+                      disabled={isGenerating}
+                    />
+                    <Button
+                      title="PDF"
+                      size="sm"
+                      variant="outline"
+                      style={{ flex: 1 }}
+                      icon={<Feather name="file-text" size={15} color={colors.foreground} />}
+                      onPress={() => void handleDownload('pdf', provider)}
+                      disabled={isGenerating}
+                    />
+                  </View>
+                </View>
               ))}
               <Button 
                 title="Reabrir Visita"
@@ -516,6 +525,20 @@ const styles = StyleSheet.create({
   },
   card: {
     padding: 16,
+  },
+  providerDownloads: {
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    gap: 10,
+  },
+  providerName: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+  },
+  providerButtons: {
+    flexDirection: 'row',
+    gap: 8,
   },
   cardTitle: {
     fontSize: 18,
