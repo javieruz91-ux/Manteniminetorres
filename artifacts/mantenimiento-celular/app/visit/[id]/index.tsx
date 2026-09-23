@@ -107,10 +107,18 @@ export default function VisitDetailScreen() {
   const visit = getVisit(id);
 
   const activeFields = catalog?.fields ?? (visit?.demoOnly ? createDemoCatalog().fields : []);
-  const allQuestions = useMemo(() => catalogQuestions(activeFields), [activeFields]);
+  const towerPhotoField = activeFields.find(field =>
+    field.sheet === 'INFRAESTRUCTURA' && field.evidenceSlot === 'photo' && field.target?.cell === 'B60',
+  );
+  const captureFields = useMemo(
+    () => activeFields.filter(field => field.id !== towerPhotoField?.id),
+    [activeFields, towerPhotoField?.id],
+  );
+  const towerPhotos = towerPhotoField ? responsePhotos(visit?.responses[towerPhotoField.id]) : [];
+  const allQuestions = useMemo(() => catalogQuestions(captureFields), [captureFields]);
   const sheets = useMemo(
-    () => [PRESENTATION_SHEET, ...questionnaireSheets(activeFields)],
-    [activeFields],
+    () => [PRESENTATION_SHEET, ...questionnaireSheets(captureFields)],
+    [captureFields],
   );
   const availableSections = useMemo(
     () => selectedSheet === PRESENTATION_SHEET
@@ -122,13 +130,13 @@ export default function VisitDetailScreen() {
     ? selectedSection
     : availableSections[0] ?? selectedSheet;
   const pages = useMemo<CapturePage[]>(
-    () => buildCapturePages(activeFields, {
+    () => buildCapturePages(captureFields, {
       sheet: selectedSheet,
       section: activeSection,
       search,
       pageSize: DEFAULT_PAGE_SIZE,
     }),
-    [activeFields, activeSection, search, selectedSheet],
+    [captureFields, activeSection, search, selectedSheet],
   );
   const safePageIndex = Math.min(pageIndex, Math.max(0, pages.length - 1));
   const currentPage = pages[safePageIndex];
@@ -149,11 +157,11 @@ export default function VisitDetailScreen() {
       question.field.type === 'status'),
   );
   const realQuestionCount = realQuestions.length;
-  const capturableFields = capturableFieldCount(activeFields);
+  const capturableFields = capturableFieldCount(captureFields) + Number(Boolean(towerPhotoField));
   const completed = completedQuestionCount(realQuestions, visit);
   const currentQuestions = selectedSheet === PRESENTATION_SHEET
     ? []
-    : sectionQuestions(activeFields, selectedSheet, activeSection);
+    : sectionQuestions(captureFields, selectedSheet, activeSection);
   const currentCompleted = completedQuestionCount(currentQuestions, visit);
   const progress = realQuestionCount ? completed / realQuestionCount : 0;
   const currentProgress = currentQuestions.length ? currentCompleted / currentQuestions.length : 0;
@@ -208,7 +216,7 @@ export default function VisitDetailScreen() {
           text: 'Marcar como OK',
           onPress: () => {
             void (async () => {
-              for (const questionId of currentSectionQuestionIds(activeFields, selectedSheet, activeSection)) {
+              for (const questionId of currentSectionQuestionIds(captureFields, selectedSheet, activeSection)) {
                 if (statusFor(questionId) !== 'PENDING') continue;
                 const owner = sectionForQuestion(questionId);
                 if (!owner) continue;
@@ -280,7 +288,7 @@ export default function VisitDetailScreen() {
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 32) }]}
+        contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 24) + 76 }]}
         keyboardShouldPersistTaps="handled"
       >
         <Card style={styles.hero}>
@@ -319,6 +327,28 @@ export default function VisitDetailScreen() {
             </View>
           )}
         </Card>
+
+        {selectedSheet === PRESENTATION_SHEET && towerPhotoField && (
+          <Card style={styles.towerPhotoCard}>
+            <View style={styles.photoHeading}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.selectorLabel, { color: colors.foreground }]}>Foto general de la torre</Text>
+                <Text style={{ color: colors.mutedForeground, marginTop: 4 }}>
+                  Se agregará al reporte fotográfico del formato.
+                </Text>
+              </View>
+              <Feather name="camera" size={22} color={colors.primary} />
+            </View>
+            <PhotoPicker
+              photos={towerPhotos}
+              type="GENERAL"
+              label="Agregar desde el teléfono o tomar una foto"
+              disabled={isReadOnly}
+              onAdd={photo => void updateResponse(visit.id, towerPhotoField.id, serializePhotos([...towerPhotos, photo]))}
+              onRemove={photoId => void updateResponse(visit.id, towerPhotoField.id, serializePhotos(towerPhotos.filter(photo => photo.id !== photoId)))}
+            />
+          </Card>
+        )}
 
         <Text style={[styles.selectorLabel, { color: colors.foreground }]}>Hoja</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
@@ -414,7 +444,7 @@ export default function VisitDetailScreen() {
 
         {selectedSheet !== PRESENTATION_SHEET && (
           <Button
-            title={`Marcar pendientes de “${activeSection}” como OK`}
+            title="Marcar pendientes como OK"
             variant="outline"
             icon={<Feather name="check-square" size={18} color={colors.foreground} />}
             onPress={markRemainingOk}
@@ -422,22 +452,6 @@ export default function VisitDetailScreen() {
           />
         )}
 
-        <View style={styles.navigationRow}>
-          <Button
-            title="Anterior"
-            variant="outline"
-            style={{ flex: 1 }}
-            icon={<Feather name="arrow-left" size={18} color={colors.foreground} />}
-            onPress={goPrevious}
-            disabled={selectedSheet === PRESENTATION_SHEET && safePageIndex === 0}
-          />
-          <Button
-            title="Siguiente"
-            style={{ flex: 1 }}
-            icon={<Feather name="arrow-right" size={18} color={colors.primaryForeground} />}
-            onPress={goNext}
-          />
-        </View>
         <Button
           title="Guardar y continuar después"
           variant="ghost"
@@ -455,6 +469,33 @@ export default function VisitDetailScreen() {
           onPress={() => router.push(`/visit/${visit.id}/summary`)}
         />
       </ScrollView>
+      <View style={[styles.stickyNavigation, {
+        backgroundColor: colors.card,
+        borderTopColor: colors.border,
+        paddingBottom: Math.max(insets.bottom, 8),
+      }]}>
+        <Button
+          testID="btn-previous-page"
+          title="Anterior"
+          size="sm"
+          variant="outline"
+          style={{ flex: 1 }}
+          icon={<Feather name="arrow-left" size={16} color={colors.foreground} />}
+          onPress={goPrevious}
+          disabled={selectedSheet === PRESENTATION_SHEET && safePageIndex === 0}
+        />
+        <Text style={[styles.stickyPageCount, { color: colors.mutedForeground }]}>
+          {pages.length ? `${safePageIndex + 1} / ${pages.length}` : '0 / 0'}
+        </Text>
+        <Button
+          testID="btn-next-page"
+          title="Siguiente"
+          size="sm"
+          style={{ flex: 1 }}
+          icon={<Feather name="arrow-right" size={16} color={colors.primaryForeground} />}
+          onPress={goNext}
+        />
+      </View>
     </View>
   );
 }
@@ -651,6 +692,8 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   content: { padding: 16, gap: 14, width: '100%', maxWidth: 900, alignSelf: 'center' },
   hero: { padding: 16, gap: 12 },
+  towerPhotoCard: { padding: 16, gap: 10 },
+  photoHeading: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   titleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   title: { fontSize: 24, fontFamily: 'Inter_700Bold' },
   subtitle: { fontSize: 14, lineHeight: 20, marginTop: 4 },
@@ -679,6 +722,14 @@ const styles = StyleSheet.create({
   observation: { minHeight: 72, textAlignVertical: 'top', paddingTop: 12 },
   findingHint: { fontSize: 13, lineHeight: 18 },
   findingBox: { gap: 8, marginTop: 2 },
-  navigationRow: { flexDirection: 'row', gap: 10 },
+  stickyNavigation: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderTopWidth: 1,
+    paddingHorizontal: 14,
+    paddingTop: 10,
+  },
+  stickyPageCount: { minWidth: 42, textAlign: 'center', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 });
