@@ -12,6 +12,7 @@ import { createUuid } from '@/lib/uuid';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { saveAndShareTemplateExport } from '@/utils/templateExport';
 import { exportTemplate, exportTemplateLocally, getTemplateExportBlockReason } from '@/lib/templateApi';
+import { findingsForProvider, providersForFindings } from '@/utils/providerReports';
 import { useTemplate } from '@/context/TemplateContext';
 import { AuditEvent, Finding, Photo } from '@/types';
 import { getCloseEligibility } from '@/utils/maintenanceRules';
@@ -209,8 +210,7 @@ export default function SummaryScreen() {
     }
   };
 
-  const providers = [...new Map(visit.findings.flatMap(finding => finding.responsible.split(/[,;\n]+|\s+\/\s+|\s+y\s+/i))
-    .map(name => name.trim()).filter(Boolean).map(name => [name.toLocaleLowerCase('es-MX'), name] as const)).values()];
+  const providers = providersForFindings(visit.findings);
 
   const handleDownload = async (format: 'xlsx' | 'pdf', provider?: string) => {
     const exportBlock = getTemplateExportBlockReason(visit, catalog?.descriptor);
@@ -260,8 +260,7 @@ export default function SummaryScreen() {
             })),
             photos: await Promise.all(
               ([
-                ...visit.findings.filter(finding => !provider || finding.responsible.split(/[,;\n]+|\s+\/\s+|\s+y\s+/i)
-                  .some(name => name.trim().toLocaleLowerCase('es-MX') === provider.toLocaleLowerCase('es-MX')))
+                ...findingsForProvider(visit.findings, provider)
                   .flatMap(finding => finding.photos).map(photo => ({ photo })),
                 ...towerPhotos,
               ] as Array<{ photo: Photo; target?: string }>).map(async ({ photo, target }) => ({
