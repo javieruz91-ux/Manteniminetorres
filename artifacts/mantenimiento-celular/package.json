@@ -10,8 +10,8 @@
     "serve": "node server/serve.js",
     "verify:web": "node scripts/verify-web.js",
     "verify:web:persistence": "node scripts/verify-web-persistence.js",
-    "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "test": "vitest run --configLoader runner",
+    "typecheck": "pnpm exec tsc -p ../../lib/api-client-react/tsconfig.json && tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
