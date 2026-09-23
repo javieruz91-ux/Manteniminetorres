@@ -144,8 +144,11 @@ export function TemplateProvider({ children }: { children: ReactNode }) {
             const canonical = normalizeTemplateCatalog(trial);
             const trialSourceFileName = trial.source?.fileName || fileName;
             canonicalFileName = trialSourceFileName;
+            const legacyOfficialSource = trialSourceFileName === 'plantilla_region8_limpia.xlsx' &&
+              ['Mantenimiento_Preventivo_a_Sitios_Celulares_REV2_(1)_1789252951099.xlsx',
+                'Mantenimiento_Preventivo_a_Sitios_Celulares.xlsx'].includes(storedSource?.fileName || '');
             const isCustomSource = Boolean(
-              storedSource && storedSource.fileName !== trialSourceFileName,
+              storedSource && storedSource.fileName !== trialSourceFileName && !legacyOfficialSource,
             );
             if (!isCustomSource && canonical) {
               next = canonical;
