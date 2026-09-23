@@ -10,6 +10,7 @@ import {
   CURRENT_CATALOG_SCHEMA_VERSION,
 } from '../types';
 import { stableTemplateFieldKey, templateFieldRef } from './templateFields';
+import { createUuid } from '@/lib/uuid';
 
 export interface DraftInput {
   siteId?: string;
@@ -41,7 +42,7 @@ export function createDraftVisit(
   dependencies: DraftDependencies = {},
 ): Visit {
   const now = dependencies.now ?? (() => new Date().toISOString());
-  const id = dependencies.id ?? (() => crypto.randomUUID());
+  const id = dependencies.id ?? createUuid;
   const timestamp = now();
   const templateFields = data.templateFields ?? [];
 
@@ -247,7 +248,13 @@ export function migrateVisitToCatalog(
       schemaVersion: template.schemaVersion ?? CURRENT_CATALOG_SCHEMA_VERSION,
     },
     responses,
-    sections: sectionsForCatalog(fields, responses),
+    sections: sectionsForCatalog(fields, responses).map(section => ({
+      ...section,
+      points: [
+        ...section.points,
+        ...(input.sections?.find(previous => previous.id === section.id)?.points.filter(point => point.id.startsWith('additional:')) ?? []),
+      ],
+    })),
     clientUpdatedAt: input.template?.hash === template.hash &&
       input.template?.schemaVersion === (template.schemaVersion ?? CURRENT_CATALOG_SCHEMA_VERSION) &&
       legacyFields.length === 0
@@ -278,7 +285,7 @@ export function continueDraftVisit(
 ): Visit {
   assertVisitEditable(visit);
   const now = dependencies.now ?? (() => new Date().toISOString());
-  const id = dependencies.id ?? (() => crypto.randomUUID());
+  const id = dependencies.id ?? createUuid;
   return {
     ...visit,
     ...data,
@@ -311,7 +318,7 @@ export function setPointStatus(
 ): Visit {
   assertVisitEditable(visit);
   const now = dependencies.now ?? (() => new Date().toISOString());
-  const id = dependencies.id ?? (() => crypto.randomUUID());
+  const id = dependencies.id ?? createUuid;
   const sections = visit.sections.map((section) =>
     section.id !== sectionId
       ? section
@@ -428,7 +435,8 @@ export function getCloseEligibility(visit: Visit, templateFields: TemplateField[
         missingItems.push(`Falta hallazgo para punto NOK: ${section.title} - ${point.title}`);
         continue;
       }
-      if (!finding.description?.trim() || !finding.responsible?.trim() || !isoDate.test(finding.commitmentDate)) {
+      if (!finding.description?.trim() || !finding.responsible?.trim() ||
+        (finding.commitmentDate && !isoDate.test(finding.commitmentDate))) {
         allNokHaveFindings = false;
         missingItems.push(`Datos de hallazgo incompletos en: ${section.title} - ${point.title}`);
       }
@@ -476,7 +484,7 @@ export function closeVisit(
     throw new Error('La visita no cumple los requisitos para ser cerrada.');
   }
   const now = dependencies.now ?? (() => new Date().toISOString());
-  const id = dependencies.id ?? (() => crypto.randomUUID());
+  const id = dependencies.id ?? createUuid;
   return {
     ...visit,
     lifecycleStatus: 'CERRADA',
@@ -499,7 +507,7 @@ export function reopenVisit(
     throw new Error('Transición inválida: Solo visitas cerradas pueden ser reabiertas.');
   }
   const now = dependencies.now ?? (() => new Date().toISOString());
-  const id = dependencies.id ?? (() => crypto.randomUUID());
+  const id = dependencies.id ?? createUuid;
   return {
     ...visit,
     lifecycleStatus: 'REABIERTA',

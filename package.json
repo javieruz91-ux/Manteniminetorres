@@ -5,6 +5,7 @@
   "scripts": {
     "preinstall": "node scripts/check-package-manager.mjs",
     "dev:local": "node scripts/dev-local.mjs",
+    "dev:lan": "node scripts/dev-local.mjs --lan",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "test": "pnpm -r --if-present run test",
     "typecheck:libs": "tsc --build",

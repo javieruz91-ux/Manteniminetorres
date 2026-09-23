@@ -16,10 +16,13 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import {
   convertXlsxToPdf,
   embedEvidence,
-  PHOTO_SLOT_COUNT,
+  getPhotoSlotCount,
   parseTemplate,
   prepareBlankTemplate,
   patchTemplate,
+  providerSnapshot,
+  findingsForProvider,
+  followUpPdfWorkbook,
   sha256,
   verifyTemplate,
   resolveLocalSeparators,
@@ -91,8 +94,10 @@ function findOfficialWorkbook(): { fileName: string; filePath: string } | null {
   while (true) {
     const assetsDirectory = path.join(directory, "attached_assets");
     if (fs.existsSync(assetsDirectory)) {
-      const fileName = fs.readdirSync(assetsDirectory)
-        .find((candidate) => candidate.toLowerCase().endsWith(".xlsx"));
+      const candidates = fs.readdirSync(assetsDirectory);
+      const fileName = candidates.includes("plantilla_region8_limpia.xlsx")
+        ? "plantilla_region8_limpia.xlsx"
+        : candidates.find((candidate) => candidate.toLowerCase().endsWith(".xlsx"));
       if (fileName) {
         return { fileName, filePath: path.join(assetsDirectory, fileName) };
       }
@@ -159,15 +164,20 @@ router.post("/templates/parse-local", async (req, res) => {
 // Local-first export. It uses the exact workbook bytes supplied by the device
 // and never needs an authenticated server session.
 router.post("/templates/export-local", async (req, res) => {
-  const { fileName, contentBase64, format, snapshot, fields, photos } = req.body ?? {};
+  const { fileName, contentBase64, format, snapshot, fields, photos, provider } = req.body ?? {};
   try {
     const source = Buffer.from(String(contentBase64 ?? ""), "base64");
     if (!source.length) throw new Error("Falta el XLSX original.");
     const parsed = resolveLocalSeparators(parseTemplate(source));
     const exportCatalog = Array.isArray(fields) ? fields : parsed.catalog;
-    const patched = patchTemplate(source, snapshot, exportCatalog);
+    const selectedSnapshot = provider ? providerSnapshot(snapshot, String(provider)) : snapshot;
+    const selectedPhotoIds = new Set(provider ? findingsForProvider(snapshot, String(provider)).flatMap(finding =>
+      Array.isArray(finding.photos) ? finding.photos.map((photo: { id?: string }) => photo.id) : [],
+    ) : []);
+    const patched = patchTemplate(source, selectedSnapshot, exportCatalog);
     const evidencePhotos = Array.isArray(photos)
-      ? photos.map((photo: { id: string; contentBase64: string; contentType?: string; target?: string }) => ({
+      ? photos.filter((photo: { id: string; target?: string }) => !provider || Boolean(photo.target) || selectedPhotoIds.has(photo.id))
+        .map((photo: { id: string; contentBase64: string; contentType?: string; target?: string }) => ({
           id: photo.id,
           bytes: Buffer.from(photo.contentBase64, "base64"),
           contentType: photo.contentType ?? "image/jpeg",
@@ -184,7 +194,7 @@ router.post("/templates/export-local", async (req, res) => {
       exportCatalog,
       patched.writtenTargets,
       patched.capturedValues,
-       Math.max(1, Math.ceil(evidencePhotos.length / PHOTO_SLOT_COUNT)),
+       Math.max(1, Math.ceil(evidencePhotos.filter((photo) => !photo.target).length / getPhotoSlotCount(source))),
     );
     if (!verification.valid) {
       res.status(400).json({ error: "Exportación bloqueada: " + verification.details.join("; "), verification });
@@ -192,9 +202,10 @@ router.post("/templates/export-local", async (req, res) => {
     }
     let output = embedded.bytes;
     let mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    let outputName = `${String(fileName ?? "reporte").replace(/\.xlsx$/i, "")}_completado.xlsx`;
+    const safeProvider = provider ? `_${String(provider).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "_")}` : "";
+    let outputName = `${String(fileName ?? "reporte").replace(/\.xlsx$/i, "")}${safeProvider}_completado.xlsx`;
     if (format === "pdf") {
-      output = await convertXlsxToPdf(output);
+      output = await convertXlsxToPdf(provider ? followUpPdfWorkbook(output) : output);
       mime = "application/pdf";
       outputName = outputName.replace(/\.xlsx$/, ".pdf");
     }
@@ -392,7 +403,7 @@ router.post("/templates/export", async (req, res) => {
       exportCatalog,
       patched.writtenTargets,
       patched.capturedValues,
-       Math.max(1, Math.ceil(evidencePhotos.length / PHOTO_SLOT_COUNT)),
+       Math.max(1, Math.ceil(evidencePhotos.length / getPhotoSlotCount(source))),
     );
     if (!verification.valid) {
       res.status(400).json({ error: "Exportación bloqueada: " + verification.details.join("; "), verification });

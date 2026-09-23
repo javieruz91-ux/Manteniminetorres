@@ -211,7 +211,7 @@ function validateSnapshot(snapshot: {
         responsible: string;
         priority: string;
         startDate: Date;
-        commitmentDate: Date;
+        commitmentDate: Date | null;
         completedDate: Date | null;
         state: string;
       }>;
@@ -352,7 +352,7 @@ function validateSnapshot(snapshot: {
         !finding.responsible.trim() ||
         !finding.priority ||
         !validDate(finding.startDate.toISOString()) ||
-        !validDate(finding.commitmentDate.toISOString())
+        (finding.commitmentDate !== null && !validDate(finding.commitmentDate.toISOString()))
       ) {
         throw new InvalidSnapshotError(
           `Finding ${finding.id} is missing required fields`,

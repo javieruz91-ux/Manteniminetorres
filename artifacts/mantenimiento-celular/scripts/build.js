@@ -132,8 +132,10 @@ function exportWebBundle(expoPublicDomain, expoPublicReplId) {
     throw new Error(`Web export failed with exit code ${result.status}`);
   }
 
-  const officialTemplate = fs.readdirSync(path.join(workspaceRoot, 'attached_assets'))
-    .find((fileName) => fileName.toLowerCase().endsWith('.xlsx'));
+  const templateCandidates = fs.readdirSync(path.join(workspaceRoot, 'attached_assets'));
+  const officialTemplate = templateCandidates.includes('plantilla_region8_limpia.xlsx')
+    ? 'plantilla_region8_limpia.xlsx'
+    : templateCandidates.find((fileName) => fileName.toLowerCase().endsWith('.xlsx'));
   if (!officialTemplate) {
     throw new Error('No official XLSX was found in attached_assets');
   }

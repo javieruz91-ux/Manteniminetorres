@@ -25,7 +25,15 @@ No se necesita cuenta de Replit, PostgreSQL ni almacenamiento en la nube. El com
 
 ## Probar desde un teléfono
 
-La computadora y el teléfono deben estar en la misma red Wi-Fi. Para una prueba desde otro dispositivo, inicia Expo escuchando en la red local y configura la URL de la API con la dirección IP de la computadora. El firewall de Windows puede pedir autorización para permitir Node.js en la red privada.
+La computadora y el teléfono deben estar en la misma red Wi-Fi. Desde PowerShell ejecuta:
+
+```powershell
+pnpm dev:lan
+```
+
+El comando muestra una dirección similar a `http://192.168.1.20:8081`. Ábrela en el navegador del teléfono. La dirección se detecta automáticamente y también se usa para conectar el teléfono con el generador local del archivo Excel.
+
+Si Windows solicita permiso para Node.js, permite el acceso únicamente en **Redes privadas**. Mantén la terminal abierta durante toda la prueba.
 
 ## Verificación
 

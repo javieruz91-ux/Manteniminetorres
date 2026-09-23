@@ -17,7 +17,20 @@ export const EXPECTED_SHEETS = [
   ["REPORTE FOTOGRAFICO", 13, 211],
   ["base", 1, 1],
 ] as const;
+export const REGION8_SHEETS = [
+  ["PRESENTACION", 8, 24],
+  ["(HW) ALARMAS DE FUERZA", 10, 81],
+  ["PLANTA HUAWEI", 20, 70],
+  ["INFRAESTRUCTURA", 13, 278],
+  ["ELECTROMECANICA", 13, 141],
+  ["TIERRAS", 12, 81],
+  ["TRANSMISION", 11, 32],
+  ["HOJA DE SEG", 8, 42],
+  ["REPORTE FOTOGRAFICO", 13, 282],
+  ["SitiosChetumal", 7, 140],
+] as const;
 export const PHOTO_SLOT_COUNT = 16;
+export const REGION8_PHOTO_SLOT_COUNT = 20;
 export const CATALOG_SCHEMA_VERSION = 3;
 const PHOTO_SLOT_START_ROW = 3;
 const OFFICIAL_PHOTO_SLOT_REFS = [
@@ -29,6 +42,18 @@ const OFFICIAL_PHOTO_SLOT_REFS = [
   "REPORTE FOTOGRAFICO!A138:F154", "REPORTE FOTOGRAFICO!H138:M154",
   "REPORTE FOTOGRAFICO!A166:F182", "REPORTE FOTOGRAFICO!H166:M182",
   "REPORTE FOTOGRAFICO!A190:F206", "REPORTE FOTOGRAFICO!H190:M206",
+] as const;
+const REGION8_PHOTO_SLOT_REFS = [
+  "REPORTE FOTOGRAFICO!A10:F27", "REPORTE FOTOGRAFICO!H10:M27",
+  "REPORTE FOTOGRAFICO!A34:F50", "REPORTE FOTOGRAFICO!H34:M50",
+  "REPORTE FOTOGRAFICO!A66:F82", "REPORTE FOTOGRAFICO!H66:M82",
+  "REPORTE FOTOGRAFICO!A90:F106", "REPORTE FOTOGRAFICO!H90:M106",
+  "REPORTE FOTOGRAFICO!A123:F139", "REPORTE FOTOGRAFICO!H123:M139",
+  "REPORTE FOTOGRAFICO!A147:F163", "REPORTE FOTOGRAFICO!H147:M163",
+  "REPORTE FOTOGRAFICO!A180:F196", "REPORTE FOTOGRAFICO!H180:M196",
+  "REPORTE FOTOGRAFICO!A204:F220", "REPORTE FOTOGRAFICO!H204:M220",
+  "REPORTE FOTOGRAFICO!A237:F253", "REPORTE FOTOGRAFICO!H237:M253",
+  "REPORTE FOTOGRAFICO!A261:F277", "REPORTE FOTOGRAFICO!H261:M277",
 ] as const;
 
 export type ResponseType =
@@ -281,7 +306,7 @@ function updateEntryData(entry: ZipEntry, data: Buffer): void {
   entry.central.writeUInt32LE(data.length, 24);
 }
 
-function cloneEvidenceBlocks(entries: ZipEntry[], sheet: { path: string }, pages: number): void {
+function cloneEvidenceBlocks(entries: ZipEntry[], sheet: { path: string }, pages: number, blockRows = 211): void {
   if (pages <= 1) return;
   const worksheet = entries.find((entry) => entry.name === sheet.path);
   if (!worksheet) throw new Error("Falta XML de REPORTE FOTOGRAFICO");
@@ -289,50 +314,50 @@ function cloneEvidenceBlocks(entries: ZipEntry[], sheet: { path: string }, pages
   const rows = new Map<number, string>();
   for (const match of xml.matchAll(/<row\b[^>]*\br="(\d+)"[^>]*(?:\/>|>[\s\S]*?<\/row\s*>)/gi)) {
     const row = Number(match[1]);
-    if (row >= 1 && row <= 211) rows.set(row, match[0]);
+    if (row >= 1 && row <= blockRows) rows.set(row, match[0]);
   }
   if (rows.size === 0) throw new Error("REPORTE FOTOGRAFICO no contiene filas clonables en el bloque base A1:M211");
   const sheetDataClose = xml.indexOf("</sheetData>");
   if (sheetDataClose < 0) throw new Error("REPORTE FOTOGRAFICO carece de sheetData");
   let clones = "";
   for (let page = 1; page < pages; page++) {
-    const offset = page * 211;
+    const offset = page * blockRows;
     clones += [...rows.entries()].map(([, rowXml]) => shiftReferenceAttributes(rowXml, offset)).join("");
   }
   xml = `${xml.slice(0, sheetDataClose)}${clones}${xml.slice(sheetDataClose)}`;
-  xml = xml.replace(/(<dimension\b[^>]*\bref=")[^"]+(")/i, `$1A1:M${211 * pages}$2`);
+  xml = xml.replace(/(<dimension\b[^>]*\bref=")[^"]+(")/i, `$1A1:M${blockRows * pages}$2`);
   const mergeContainer = /<mergeCells\b[^>]*>([\s\S]*?)<\/mergeCells>/i.exec(xml);
   if (mergeContainer) {
     const source = mergeContainer[1];
     let extra = "";
-    for (let page = 1; page < pages; page++) extra += source.replace(/<mergeCell\b[^>]*\/>/gi, (merge) => shiftReferenceAttributes(merge, page * 211));
+    for (let page = 1; page < pages; page++) extra += source.replace(/<mergeCell\b[^>]*\/>/gi, (merge) => shiftReferenceAttributes(merge, page * blockRows));
     xml = xml.replace(mergeContainer[0], mergeContainer[0].replace("</mergeCells>", `${extra}</mergeCells>`));
   }
   const dataValidationMatches = [...xml.matchAll(/<dataValidation\b[^>]*\/>|<dataValidation\b[^>]*>[\s\S]*?<\/dataValidation\s*>/gi)]
     .map((match) => match[0]).filter((item) => /\bsqref="/i.test(item));
   if (dataValidationMatches.length) {
     const extra = dataValidationMatches.map((item) =>
-      [...Array(pages - 1)].map((_, page) => shiftReferenceAttributes(item, (page + 1) * 211)).join(""),
+      [...Array(pages - 1)].map((_, page) => shiftReferenceAttributes(item, (page + 1) * blockRows)).join(""),
     ).join("");
     const container = /<\/dataValidations>/i.exec(xml);
     if (container) xml = `${xml.slice(0, container.index)}${extra}${xml.slice(container.index)}`;
   }
   const conditionalMatches = [...xml.matchAll(/<conditionalFormatting\b[^>]*>[\s\S]*?<\/conditionalFormatting\s*>/gi)].map((match) => match[0]);
   if (conditionalMatches.length) {
-    const extra = conditionalMatches.map((item) => [...Array(pages - 1)].map((_, page) => shiftReferenceAttributes(item, (page + 1) * 211)).join("")).join("");
+    const extra = conditionalMatches.map((item) => [...Array(pages - 1)].map((_, page) => shiftReferenceAttributes(item, (page + 1) * blockRows)).join("")).join("");
     const before = xml.indexOf("</worksheet>");
     xml = `${xml.slice(0, before)}${extra}${xml.slice(before)}`;
   }
   const hyperlinkMatches = [...xml.matchAll(/<hyperlink\b[^>]*\/>/gi)].map((match) => match[0]).filter((item) => /\bref="/i.test(item));
   if (hyperlinkMatches.length) {
-    const extra = hyperlinkMatches.map((item) => [...Array(pages - 1)].map((_, page) => shiftReferenceAttributes(item, (page + 1) * 211)).join("")).join("");
+    const extra = hyperlinkMatches.map((item) => [...Array(pages - 1)].map((_, page) => shiftReferenceAttributes(item, (page + 1) * blockRows)).join("")).join("");
     const container = /<\/hyperlinks>/i.exec(xml);
     if (container) xml = `${xml.slice(0, container.index)}${extra}${xml.slice(container.index)}`;
   }
   const breakMatches = [...xml.matchAll(/<brk\b[^>]*\bid="(\d+)"[^>]*\/>/gi)].map((match) => match[0]);
   if (breakMatches.length) {
     const extra = breakMatches.map((item) => [...Array(pages - 1)].map((_, page) =>
-      item.replace(/\bid="(\d+)"/i, (_m, id) => `id="${Number(id) + page * 211}"`).replace(/\b(max|man)="(\d+)"/gi, (_m, name, row) => `${name}="${Number(row) + page * 211}"`),
+      item.replace(/\bid="(\d+)"/i, (_m, id) => `id="${Number(id) + page * blockRows}"`).replace(/\b(max|man)="(\d+)"/gi, (_m, name, row) => `${name}="${Number(row) + page * blockRows}"`),
     ).join("")).join("");
     const container = /<\/rowBreaks>/i.exec(xml);
     if (container) xml = `${xml.slice(0, container.index)}${extra}${xml.slice(container.index)}`;
@@ -353,11 +378,11 @@ function cloneEvidenceBlocks(entries: ZipEntry[], sheet: { path: string }, pages
         .map((match) => match[0])
         .filter((anchor) => {
           const rows = [...anchor.matchAll(/<xdr:row>(\d+)<\/xdr:row>/gi)].map((match) => Number(match[1]));
-          return rows.length > 0 && rows.every((row) => row < 211);
+          return rows.length > 0 && rows.every((row) => row < blockRows);
         });
       let anchorClones = "";
       for (let page = 1; page < pages; page++) {
-        const offset = page * 211;
+        const offset = page * blockRows;
         anchorClones += anchors.map((anchor) => anchor
           .replace(/(<xdr:row>)(\d+)(<\/xdr:row>)/gi, (_m, open, row, close) =>
             `${open}${Number(row) + offset}${close}`)
@@ -375,7 +400,7 @@ function cloneEvidenceBlocks(entries: ZipEntry[], sheet: { path: string }, pages
     workbookXml = workbookXml.replace(/(<definedName\b[^>]*name="_xlnm\.Print_Area"[^>]*>)([\s\S]*?)(<\/definedName>)/gi,
       (match, open: string, body: string, close: string) =>
         body.includes("REPORTE FOTOGRAFICO") || body.includes("REPORTE%20FOTOGRAFICO")
-          ? `${open}${body.replace(/(\$M\$?)\d+/g, `$1${211 * pages}`)}${close}` : match);
+          ? `${open}${body.replace(/(\$M\$?)\d+/g, `$1${blockRows * pages}`)}${close}` : match);
     updateEntryData(workbook, Buffer.from(workbookXml));
   }
 }
@@ -399,12 +424,15 @@ export function embedEvidence(
   }
   const parsed = zipEntries(bytes);
   const sheets = workbookSheets(parsed.entries);
+  const region8 = workbookProfile(parsed.entries) === REGION8_SHEETS;
+  const slotRefs = region8 ? REGION8_PHOTO_SLOT_REFS : OFFICIAL_PHOTO_SLOT_REFS;
+  const blockRows = region8 ? 282 : 211;
   const mappedPhotoFields = catalog
     .filter((field) => field.state === "mapped" && field.sheet === "REPORTE FOTOGRAFICO" && field.evidenceSlot === "photo")
     .sort((a, b) => a.target.localeCompare(b.target));
   const photoFields: TemplateField[] = mappedPhotoFields.length > 0
     ? mappedPhotoFields
-    : OFFICIAL_PHOTO_SLOT_REFS.map((target, index) => ({
+    : slotRefs.map((target, index) => ({
       id: `REPORTE FOTOGRAFICO:photo:${index + 1}`,
       sheet: "REPORTE FOTOGRAFICO",
       subsection: `espacio ${index + 1}`,
@@ -430,11 +458,11 @@ export function embedEvidence(
   const worksheet = parsed.entries.find((entry) => entry.name === sheet.path);
   if (!worksheet) return { bytes, consumedPhotoIds: [], details: ["Falta XML de REPORTE FOTOGRAFICO"], valid: false };
   const baseDimension = attr(/<dimension\b([^>]*)\/?>/i.exec(xmlData(worksheet))?.[1] ?? "", "ref");
-  if (baseDimension !== "A1:M211") {
-    return { bytes, consumedPhotoIds: [], details: ["REPORTE FOTOGRAFICO no tiene la dimensión base A1:M211"], valid: false };
+  if (baseDimension !== `A1:M${blockRows}`) {
+    return { bytes, consumedPhotoIds: [], details: [`REPORTE FOTOGRAFICO no tiene la dimensión base A1:M${blockRows}`], valid: false };
   }
   const pages = Math.max(1, Math.ceil(photos.length / photoFields.length));
-  cloneEvidenceBlocks(parsed.entries, sheet, pages);
+  cloneEvidenceBlocks(parsed.entries, sheet, pages, blockRows);
   const worksheetRelsPath = `${sheet.path.slice(0, sheet.path.lastIndexOf("/"))}/_rels/${sheet.path.slice(sheet.path.lastIndexOf("/") + 1)}.rels`;
   let worksheetRels = parsed.entries.find((entry) => entry.name === worksheetRelsPath);
   let worksheetRelsXml = worksheetRels ? xmlData(worksheetRels) : `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
@@ -482,7 +510,7 @@ export function embedEvidence(
     const relationshipId = nextRelationshipId(drawingRelsXml);
     drawingRelsXml = drawingRelsXml.replace("</Relationships>", `<Relationship Id="${relationshipId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${mediaPath.split("/").pop()}"/></Relationships>`);
     const slotRef = photoFields[index % photoFields.length].target.split("!")[1];
-    const pageOffset = Math.floor(index / photoFields.length) * 211;
+    const pageOffset = Math.floor(index / photoFields.length) * blockRows;
     drawingXml = drawingXml.replace(/<\/(?:xdr:wsDr|wsDr)>\s*$/i,
       `${evidenceAnchor(shiftCellReference(slotRef, pageOffset), relationshipId, shapeStart + index, `Evidence ${photo.id}`)}</xdr:wsDr>`);
     consumedPhotoIds.push(photo.id);
@@ -694,14 +722,25 @@ function xmlData(entry: ZipEntry): string {
   return entry.data.toString("utf8");
 }
 
-function validateWorkbookStructure(entries: ZipEntry[], evidencePages = 1): string[] {
+function workbookProfile(entries: ZipEntry[]) {
   const sheets = workbookSheets(entries);
   if (sheets.length !== EXPECTED_SHEETS.length) throw new Error("La plantilla debe tener exactamente diez hojas");
+  return sheets.at(-1)?.name === "SitiosChetumal" ? REGION8_SHEETS : EXPECTED_SHEETS;
+}
+
+export function getPhotoSlotCount(bytes: Buffer): number {
+  return workbookProfile(zipEntries(bytes).entries) === REGION8_SHEETS
+    ? REGION8_PHOTO_SLOT_COUNT : PHOTO_SLOT_COUNT;
+}
+
+function validateWorkbookStructure(entries: ZipEntry[], evidencePages = 1): string[] {
+  const sheets = workbookSheets(entries);
+  const profile = workbookProfile(entries);
   const expected = new Map<string, { cols: number; rows: number }>(
-    EXPECTED_SHEETS.map(([name, cols, rows]) => [name, { cols, rows }]),
+    profile.map(([name, cols, rows]) => [name, { cols, rows }]),
   );
   sheets.forEach((sheet, index) => {
-    const expectedSheet = EXPECTED_SHEETS[index];
+    const expectedSheet = profile[index];
     const dims = expected.get(sheet.name);
     if (!dims || expectedSheet[0] !== sheet.name) throw new Error(`Hoja ${index + 1} inválida: se esperaba ${expectedSheet?.[0] ?? "ninguna"}`);
     const entry = entries.find((e) => e.name === sheet.path);
@@ -798,7 +837,7 @@ export function parseTemplate(bytes: Buffer): TemplateCatalog {
     "(HW) ALARMAS DE FUERZA", "PLANTA HUAWEI", "INFRAESTRUCTURA",
     "ELECTROMECANICA", "TIERRAS", "TRANSMISION",
   ]);
-  const excludedSheets = new Set(["HOJA DE SEG", "REPORTE FOTOGRAFICO", "base"]);
+  const excludedSheets = new Set(["HOJA DE SEG", "REPORTE FOTOGRAFICO", "base", "SitiosChetumal"]);
   // These are the only rows in PLANTA HUAWEI that have a real checklist
   // status destination. The remaining rows are the owner's relay/alarm
   // reference tables and must stay informational.
@@ -1565,6 +1604,14 @@ export function prepareBlankTemplate(bytes: Buffer): {
 } {
   const parsed = zipEntries(bytes);
   const sheets = validateWorkbookStructure(parsed.entries);
+  if (workbookProfile(parsed.entries) === REGION8_SHEETS) {
+    const photoSlots = [...REGION8_PHOTO_SLOT_REFS];
+    return {
+      bytes,
+      photoSlots,
+      verification: { valid: true, sheets, writtenTargets: [], details: ["Plantilla regional limpia con 20 espacios fotográficos"] },
+    };
+  }
   const photoSheet = workbookSheets(parsed.entries).find((sheet) => sheet.name === "REPORTE FOTOGRAFICO");
   if (!photoSheet) throw new Error("Falta REPORTE FOTOGRAFICO");
   const worksheet = parsed.entries.find((entry) => entry.name === photoSheet.path);
@@ -1660,13 +1707,38 @@ function findingContext(snapshot: unknown, finding: Record<string, unknown>): {
       String((candidate as Record<string, unknown>).id ?? "") === String(finding.pointId ?? ""),
     );
     return {
-      sheet: String(sectionRecord.name ?? sectionRecord.title ?? ""),
+      sheet: [sectionRecord.name, sectionRecord.title].map(value => String(value ?? "").trim()).filter((value, index, all) => value && all.indexOf(value) === index).join(" · "),
       point: point && typeof point === "object"
         ? String((point as Record<string, unknown>).title ?? finding.pointId ?? "")
-        : String(finding.pointId ?? ""),
+        : "Hallazgo adicional",
     };
   }
   return { sheet: "", point: String(finding.pointId ?? "") };
+}
+
+export function splitProviders(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  const names = new Map<string, string>();
+  for (const item of value.split(/[,;\n]+|\s+\/\s+|\s+y\s+/i)) {
+    const name = item.trim();
+    const key = name.toLocaleLowerCase("es-MX");
+    if (name && !names.has(key)) names.set(key, name);
+  }
+  return [...names.values()];
+}
+
+export function findingsForProvider(snapshot: unknown, provider: string): Record<string, unknown>[] {
+  const key = provider.trim().toLocaleLowerCase("es-MX");
+  return snapshotFindings(snapshot).filter(finding =>
+    splitProviders(finding.responsible).some(name => name.toLocaleLowerCase("es-MX") === key),
+  );
+}
+
+export function providerSnapshot(snapshot: unknown, provider: string): unknown {
+  if (!snapshot || typeof snapshot !== "object" || !provider.trim()) throw new Error("Selecciona un proveedor válido.");
+  const findings = findingsForProvider(snapshot, provider);
+  if (!findings.length) throw new Error(`No hay hallazgos asignados a ${provider}.`);
+  return { ...(snapshot as Record<string, unknown>), findings: findings.map(finding => ({ ...finding, responsible: provider.trim() })) };
 }
 
 export function patchTemplate(bytes: Buffer, snapshot: unknown, catalog: TemplateField[]): {
@@ -1701,7 +1773,8 @@ export function patchTemplate(bytes: Buffer, snapshot: unknown, catalog: Templat
   // intentionally excluded from the questionnaire catalog. They are filled
   // from the same stable finding identity used by the mobile draft.
   const findings = snapshotFindings(snapshot);
-  findings.slice(0, 36).forEach((finding, index) => {
+  if (findings.length > 36) throw new Error("La hoja de seguimiento admite 36 hallazgos; no se generó un reporte incompleto.");
+  findings.forEach((finding, index) => {
     const context = findingContext(snapshot, finding);
     const row = index + 7;
     writeTarget(`HOJA DE SEG!B${row}`, context.sheet);
@@ -1711,8 +1784,25 @@ export function patchTemplate(bytes: Buffer, snapshot: unknown, catalog: Templat
     writeTarget(`HOJA DE SEG!F${row}`, finding.startDate ?? "");
     writeTarget(`HOJA DE SEG!G${row}`, finding.completedDate ?? "");
   });
+  if (findings.length) {
+    const sheetPath = workbookSheets(parsed.entries).find(sheet => sheet.name === "HOJA DE SEG")?.path;
+    const entry = parsed.entries.find(item => item.name === sheetPath);
+    if (entry) {
+      let xml = xmlData(entry);
+      findings.forEach((_, index) => {
+        const row = index + 7;
+        xml = xml.replace(new RegExp(`<row\\b([^>]*\\br="${row}"[^>]*)>`, "i"), (tag, attributes: string) =>
+          `<row${attributes.replace(/\sht="[^"]*"|\scustomHeight="[^"]*"/g, "")} ht="48" customHeight="1">`);
+      });
+      updateEntryData(entry, Buffer.from(xml));
+    }
+  }
 
-  const reportObservationRefs = [
+  const reportObservationRefs = workbookProfile(parsed.entries) === REGION8_SHEETS ? [
+    "A30", "H30", "A53", "H53", "A85", "H85", "A109", "H109",
+    "A142", "H142", "A166", "H166", "A199", "H199", "A223", "H223",
+    "A256", "H256", "A280", "H280",
+  ] : [
     "A30", "H30", "A53", "H53", "A80", "H80", "A105", "H105",
     "A132", "H132", "A157", "H157", "A184", "H184", "A209", "H209",
   ];
@@ -1722,7 +1812,10 @@ export function patchTemplate(bytes: Buffer, snapshot: unknown, catalog: Templat
       `${context.sheet} · ${context.point}: ${String(finding.description ?? "")}`,
     );
   });
-  reportPhotos.slice(0, reportObservationRefs.length).forEach((description, index) => {
+  if (reportPhotos.length > reportObservationRefs.length) {
+    throw new Error("Hay más fotografías que espacios de descripción; no se generó un reporte incompleto.");
+  }
+  reportPhotos.forEach((description, index) => {
     writeTarget(`REPORTE FOTOGRAFICO!${reportObservationRefs[index]}`, description);
   });
   return { bytes: zipXml(parsed.entries, parsed.comment), writtenTargets, capturedValues };
@@ -1802,4 +1895,21 @@ export async function convertXlsxToPdf(xlsx: Buffer): Promise<Buffer> {
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+}
+
+/** Leave only the provider's action sheet and photographic evidence visible for PDF conversion. */
+export function followUpPdfWorkbook(bytes: Buffer): Buffer {
+  const parsed = zipEntries(bytes);
+  const workbook = parsed.entries.find(entry => entry.name === "xl/workbook.xml");
+  if (!workbook) throw new Error("El libro no contiene la definición de hojas.");
+  const visible = new Set(["HOJA DE SEG", "REPORTE FOTOGRAFICO"]);
+  const xml = xmlData(workbook).replace(/<sheet\b[^>]*\/>/g, tag => {
+    const name = unescapeXml(attr(tag, "name") ?? "");
+    const state = visible.has(name) ? "visible" : "hidden";
+    return /\bstate="[^"]*"/.test(tag)
+      ? tag.replace(/\bstate="[^"]*"/, `state="${state}"`)
+      : tag.replace(/\s*\/>$/, ` state="${state}"/>`);
+  });
+  updateEntryData(workbook, Buffer.from(xml));
+  return zipXml(parsed.entries, parsed.comment);
 }

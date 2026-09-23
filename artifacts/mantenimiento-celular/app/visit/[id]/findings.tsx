@@ -7,6 +7,7 @@ import { Card } from '@/components/Card';
 import { Badge } from '@/components/Badge';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Button } from '@/components/Button';
 
 export default function FindingsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -22,6 +23,8 @@ export default function FindingsScreen() {
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <FlatList
         data={visit.findings}
+        ListHeaderComponent={visit.lifecycleStatus === 'CERRADA' ? null :
+          <Button title="Agregar hallazgo adicional" onPress={() => router.push(`/visit/${visit.id}/additional`)} />}
         keyExtractor={f => f.id}
         contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 16) }]}
         ListEmptyComponent={
@@ -41,7 +44,9 @@ export default function FindingsScreen() {
           return (
             <TouchableOpacity 
               activeOpacity={0.7}
-              onPress={() => router.push(`/visit/${visit.id}/finding/${item.pointId}?sectionId=${item.sectionId}`)}
+              onPress={() => router.push(item.pointId.startsWith('additional:')
+                ? `/visit/${visit.id}/additional?findingId=${item.id}`
+                : `/visit/${visit.id}/finding/${item.pointId}?sectionId=${item.sectionId}`)}
             >
               <Card style={styles.card}>
                 <View style={styles.cardHeader}>
@@ -50,7 +55,7 @@ export default function FindingsScreen() {
                 </View>
                 
                 <Text style={[styles.contextText, { color: colors.mutedForeground }]}>
-                  {section?.title} • {point?.title}
+                  {section?.name} · {section?.title} • {point?.title || 'Hallazgo adicional'}
                 </Text>
                 
                 <Text style={[styles.description, { color: colors.foreground }]}>
@@ -64,7 +69,7 @@ export default function FindingsScreen() {
                   </View>
                   <View style={styles.footerItem}>
                     <Feather name="calendar" size={14} color={colors.mutedForeground} />
-                    <Text style={[styles.footerText, { color: colors.mutedForeground }]}>{item.commitmentDate}</Text>
+                    <Text style={[styles.footerText, { color: colors.mutedForeground }]}>{item.commitmentDate || 'Pendiente'}</Text>
                   </View>
                   <View style={styles.footerItem}>
                     <Feather name="camera" size={14} color={colors.mutedForeground} />

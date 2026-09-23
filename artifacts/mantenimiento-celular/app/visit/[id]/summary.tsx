@@ -8,7 +8,7 @@ import { Card } from '@/components/Card';
 import { Button } from '@/components/Button';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import * as Crypto from 'expo-crypto';
+import { createUuid } from '@/lib/uuid';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { saveAndShareTemplateExport } from '@/utils/templateExport';
 import { exportTemplate, exportTemplateLocally, getTemplateExportBlockReason } from '@/lib/templateApi';
@@ -96,7 +96,7 @@ export default function SummaryScreen() {
 
   const createAuditEvent = (action: string, reason: string): AuditEvent => {
     return {
-      id: Crypto.randomUUID(),
+      id: createUuid(),
       eventType: action,
       occurredAt: new Date().toISOString(),
       actorId: user?.id || 'local-technician',
@@ -209,7 +209,10 @@ export default function SummaryScreen() {
     }
   };
 
-  const handleDownload = async (format: 'xlsx' | 'pdf') => {
+  const providers = [...new Map(visit.findings.flatMap(finding => finding.responsible.split(/[,;\n]+|\s+\/\s+|\s+y\s+/i))
+    .map(name => name.trim()).filter(Boolean).map(name => [name.toLocaleLowerCase('es-MX'), name] as const)).values()];
+
+  const handleDownload = async (format: 'xlsx' | 'pdf', provider?: string) => {
     const exportBlock = getTemplateExportBlockReason(visit, catalog?.descriptor);
     if (exportBlock) {
       Alert.alert(exportBlock, exportBlock);
@@ -217,6 +220,9 @@ export default function SummaryScreen() {
     }
     try {
       setIsGenerating(true);
+      if (provider && !sourceBase64) {
+        throw new Error('Carga la plantilla local de región 8 para generar reportes por proveedor.');
+      }
       const towerPhotoFields = activeFields.filter(field =>
         field.sheet === 'INFRAESTRUCTURA' &&
         field.evidenceSlot === 'photo' &&
@@ -233,6 +239,7 @@ export default function SummaryScreen() {
             fileName: sourceFileName || catalog?.descriptor.fileName || 'reporte.xlsx',
             contentBase64: sourceBase64,
             format,
+            provider,
             snapshot: visit,
             fields: activeFields.map(field => ({
               id: field.id,
@@ -253,7 +260,9 @@ export default function SummaryScreen() {
             })),
             photos: await Promise.all(
               ([
-                ...visit.findings.flatMap(finding => finding.photos).map(photo => ({ photo })),
+                ...visit.findings.filter(finding => !provider || finding.responsible.split(/[,;\n]+|\s+\/\s+|\s+y\s+/i)
+                  .some(name => name.trim().toLocaleLowerCase('es-MX') === provider.toLocaleLowerCase('es-MX')))
+                  .flatMap(finding => finding.photos).map(photo => ({ photo })),
                 ...towerPhotos,
               ] as Array<{ photo: Photo; target?: string }>).map(async ({ photo, target }) => ({
                   id: photo.id,
@@ -398,6 +407,24 @@ export default function SummaryScreen() {
                 disabled={isGenerating}
                 loading={isGenerating}
               />
+              {providers.map(provider => (
+                <Button
+                  key={provider}
+                  title={`Reporte para ${provider} (Excel)`}
+                  variant="outline"
+                  onPress={() => void handleDownload('xlsx', provider)}
+                  disabled={isGenerating}
+                />
+              ))}
+              {providers.map(provider => (
+                <Button
+                  key={`${provider}-pdf`}
+                  title={`Reporte para ${provider} (PDF)`}
+                  variant="outline"
+                  onPress={() => void handleDownload('pdf', provider)}
+                  disabled={isGenerating}
+                />
+              ))}
               <Button 
                 title="Reabrir Visita"
                 variant="destructive"
